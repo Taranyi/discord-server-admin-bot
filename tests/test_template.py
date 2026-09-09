@@ -12,11 +12,16 @@ class CourseTemplateTests(unittest.TestCase):
     def test_loads_default_template(self) -> None:
         template = load_course_template(Path("config.yaml"))
 
-        self.assertEqual(template.category_name, "{course_name}")
+        self.assertEqual(template.category_name, "{semester} · {course_name}")
         self.assertEqual(
             [channel.key for channel in template.channels],
-            ["course_chat", "materials", "discussions", "study_room"],
+            ["course_chat", "discussions", "study_room"],
         )
+        forum = template.channels[1]
+        self.assertEqual(forum.type, "forum")
+        self.assertIn("Resource", forum.tags)
+        self.assertIn("Code", forum.tags)
+        self.assertIn("Idea", forum.tags)
         self.assertTrue(template.requires_community)
 
     def test_rejects_unknown_placeholder(self) -> None:

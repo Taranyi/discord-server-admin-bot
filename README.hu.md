@@ -94,10 +94,11 @@ kiszivárog, azonnal cseréld le.
 
 Az adminisztrációs munkamenet végén állítsd le a botot `Ctrl+C`-vel. A helyi
 SQLite adatbázis a `data/` könyvtárba kerül, és szándékosan nincs Gitben követve.
-Az első `0.4.0` indításkor a meglévő adatbázis helyben megkapja az új, közös
-csatornákat nyilvántartó táblákat; a meglévő szemeszterek, kurzusok,
-erőforrás-azonosítók és szinkronpillanatképek megmaradnak. Ettől függetlenül az
-első éles indítás előtt ajánlott másolatot készíteni a `data/bot.db` fájlról.
+Az első `0.4.0` vagy újabb indításkor a meglévő adatbázis helyben megkapja az
+új, közös csatornákat nyilvántartó táblákat; a meglévő szemeszterek,
+kurzusok, erőforrás-azonosítók és szinkronpillanatképek megmaradnak. Ettől
+függetlenül az első éles indítás előtt ajánlott másolatot készíteni a
+`data/bot.db` fájlról.
 
 ## Első használat
 
@@ -114,18 +115,39 @@ első éles indítás előtt ajánlott másolatot készíteni a `data/bot.db` f�
 7. A törlési és tömeges műveleteket először megerősítés nélkül nézd meg. Csak a
    privát előnézet átnézése után ismételd meg `confirm:true` értékkel.
 
-A kurzus létrehozásakor egy kategória és a következő struktúra készül:
+A kurzus létrehozásakor egy szemeszterrel megjelölt kategória és a következő
+struktúra készül:
 
 ```text
-Machine Learning
+2026-fall · Machine Learning
 ├── #course-chat
-├── #materials
 ├── discussions (fórum)
 └── study-room (hang)
 ```
 
 A fórumcímkék, csatornanevek, témák és a kategória formátuma a `config.yaml`
-fájlból származik.
+fájlból származik. Az alapértelmezett `{semester} · {course_name}` formátummal a
+Discord csatornalistájában több szemeszter kurzusai is egyértelműen
+megkülönböztethetők.
+
+Az alapértelmezett szerkezet szándékosan csak három csatornából áll:
+
+- A `#course-chat` a gyors beszélgetések, rövid élettartamú közlemények és a
+  kapcsolódó fórumbejegyzések hivatkozásainak helye.
+- A `discussions` a tartós, kereshető kérdések, források, feladatok, vizsgák,
+  jegyzetek, kódok, projektek és ötletek helye. A hozzájuk illő címkékkel
+  maradnak rendezettek a bejegyzések. Egy fórumbejegyzést be lehet linkelni a
+  `#course-chat` csatornába, miközben a részletes beszélgetés a bejegyzés alatt
+  marad.
+- A `study-room` a kurzus hangcsatornája.
+
+Az alapértelmezett sablonban nincs külön `#materials` csatorna. Felügyelt,
+csak olvasható jogosultságmodell nélkül ez valószínűleg egy újabb rendezetlen
+hírfolyammá válna, miközben a fórum `Resource`, `Notes` és `Important`
+címkéivel az anyagok könnyebben megtalálhatók. Kurzusonkénti random csatorna
+sincs; erre használj egy kézzel kezelt globális közösségi csatornát, például a
+`#random` csatornát. Mindkét döntést később felülvizsgálhatjuk, ha a valós
+használat alapján szükség lesz rá.
 
 ## Parancsok
 
@@ -294,6 +316,20 @@ A nevekben és témákban ezek a helyőrzők használhatók:
 - `{course_code}`
 - `{semester}`
 
+Az alapértelmezett kategóriabeállítás:
+
+```yaml
+course_template:
+  category:
+    name: "{semester} · {course_name}"
+```
+
+Ez az újonnan létrehozott kurzusokra érvényes. A meglévő kezelt kategóriákat a
+bot nem nevezi át automatikusan, mert a Discord állapota az elsődleges. Ha
+szeretnéd, nevezd át őket kézzel, majd a `/course sync` paranccsal fogadtasd el
+az aktuális nevet. Az elkészült kategórianévnek bele kell férnie a Discord 100
+karakteres korlátjába.
+
 A konfiguráció ellenőrzése még a Discord-csatlakozás előtt megtörténik. Az
 ismétlődő YAML-kulcsok, nem támogatott típusok, hibás helyőrzők, duplikált
 címkék és hibás kötelező mezők leállítják az indulást, mielőtt a bot bármit
@@ -447,7 +483,7 @@ felhasználó nem kéri kifejezetten a törlésüket.
 
 ## Ütemterv és jövőbeli lehetőségek
 
-Jelenlegi állapot: a `0.4.0` verzió adminisztrátoroknak szánt
+Jelenlegi állapot: a `0.4.1` verzió adminisztrátoroknak szánt
 szemeszterkezelést, sablonvezérelt kurzuslétrehozást és -lekérdezést, helyi,
 stabil azonosítós állapotmentést, biztonságos ütközéskezelést és
 szerverdiagnosztikát, valamint a Discord állapotát elsődlegesnek tekintő,
@@ -455,6 +491,10 @@ Discordot nem módosító kurzusszinkronizálást tartalmaz. Emellett kezelt kur
 és üres szemeszterek előnézetes törlését, valamint minden jelenlegi és jövőbeli
 kurzusra érvényes, nyilvántartott közös csatornákat is kezel. Az alábbi munkák
 opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
+
+A `0.4.1` alapértelmezetten látható szemeszter-előtagot ad az új
+kurzuskategóriákhoz, és a fent dokumentált, célzott háromcsatornás
+kurzusstruktúrát használja.
 
 ### 1. prioritás — a biztonságos szinkronizálási alap bővítése
 
@@ -492,6 +532,9 @@ opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
   törléssel.
 - Hallgatói szerepkörök és konfigurálható jogosultságsablonok.
 - Óvatos jogosultság-szinkronizálás, először vizsgálattal és próbaüzemmel.
+- Opcionális, felügyelt és csak olvasható materials csatorna megfontolása a
+  szerepkör- és jogosultságsablonok elkészülte után; ez ma szándékosan nem
+  része az alapértelmezett kurzussablonnak.
 - Ellenőrzött, tömeges szemeszter-/kurzusimport előzetesen átnézett CSV- vagy
   YAML-tervből.
 - Opcionális globális szerverstruktúra-beállítás, miután annak tulajdonosi

@@ -89,10 +89,10 @@ is leaked.
 
 Stop the bot with `Ctrl+C` when the administration session is over. The SQLite
 database is stored locally under `data/` and is intentionally ignored by Git.
-On the first `0.4.0` start, an existing database is upgraded in place with the
-new shared-channel tracking tables; existing semesters, courses, resource IDs,
-and sync snapshots are retained. A backup of `data/bot.db` before the first
-production start is still recommended.
+On the first `0.4.0` or later start, an existing database is upgraded in place
+with the new shared-channel tracking tables; existing semesters, courses,
+resource IDs, and sync snapshots are retained. A backup of `data/bot.db` before
+the first production start is still recommended.
 
 ## First-use workflow
 
@@ -109,18 +109,35 @@ production start is still recommended.
 7. Preview destructive and bulk operations without confirmation first. Repeat
    with `confirm:true` only after reviewing the private result.
 
-Course creation produces one category containing:
+Course creation produces one semester-labelled category containing:
 
 ```text
-Machine Learning
+2026-fall · Machine Learning
 ├── #course-chat
-├── #materials
 ├── discussions (forum)
 └── study-room (voice)
 ```
 
 The forum tags, channel names, topics, and category format come from
-`config.yaml`.
+`config.yaml`. The default `{semester} · {course_name}` category format keeps
+multiple semesters visibly distinguishable in Discord's channel list.
+
+The default intentionally stays at three channels:
+
+- `#course-chat` is for quick conversation, short-lived notices, and links to
+  relevant forum posts.
+- `discussions` is the durable, searchable home for questions, resources,
+  assignments, exams, notes, code, projects, and ideas. Use its matching tags
+  to keep posts organized. A forum post can be linked in `#course-chat` to draw
+  attention while the detailed conversation remains under that post.
+- `study-room` is the course voice channel.
+
+There is no separate `#materials` channel in the default template. Without a
+curated, read-only permission model it would mostly become another unstructured
+feed, while the forum's `Resource`, `Notes`, and `Important` tags already keep
+materials easier to find. There is also no per-course random channel; use a
+manually managed global community channel such as `#random` for that purpose.
+Both choices can be revisited later if real usage shows a need.
 
 ## Commands
 
@@ -282,6 +299,19 @@ Names and topics may use these placeholders:
 - `{course_code}`
 - `{semester}`
 
+The default category setting is:
+
+```yaml
+course_template:
+  category:
+    name: "{semester} · {course_name}"
+```
+
+It affects newly created courses. Existing managed categories are not renamed
+automatically because Discord is authoritative; rename them manually if desired,
+then run `/course sync` to accept the current name. The rendered category name
+must fit Discord's 100-character limit.
+
 Configuration is validated before the bot connects. Duplicate YAML keys,
 unsupported types, invalid placeholders, duplicate tags, and malformed required
 fields stop startup before Discord is modified.
@@ -423,13 +453,16 @@ unless removal is explicitly requested.
 
 ## Roadmap and future candidates
 
-Current status: version `0.4.0` has administrator-only semester management,
+Current status: version `0.4.1` has administrator-only semester management,
 template-driven course creation and inspection, local stable-ID persistence,
 safe conflict handling, server diagnostics, and non-mutating,
 Discord-authoritative course synchronization. It also has previewed course and
 empty-semester deletion plus tracked shared channels for every current and
 future course. The following work remains optional and requires a separate
 explicit request.
+
+The `0.4.1` default visibly prefixes new course categories with their semester
+and uses the focused three-channel course structure documented above.
 
 ### Priority 1 — extend the safe synchronization foundation
 
@@ -463,6 +496,9 @@ explicit request.
   course, persisted for future courses and deleted only by tracked stable ID.
 - Add student roles and configurable permission templates.
 - Add cautious permission synchronization with inspection and dry-run first.
+- Consider an optional curated, read-only materials channel after role and
+  permission templates exist; it is deliberately not part of the default
+  course template today.
 - Add validated bulk semester/course import from a reviewed CSV or YAML plan.
 - Add optional global server-structure setup after its ownership boundaries are
   defined.

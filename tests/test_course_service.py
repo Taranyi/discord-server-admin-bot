@@ -37,7 +37,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         category.channels = []
 
         text_channels = []
-        for channel_id, name in ((101, "course-chat"), (102, "materials")):
+        for channel_id, name in ((101, "course-chat"),):
             channel = MagicMock(spec=discord.TextChannel)
             channel.id = channel_id
             channel.name = name
@@ -85,7 +85,11 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.course.status, "active")
         self.assertEqual(result.course.category_id, 100)
-        self.assertEqual(len(self.database.get_course_channels(result.course.id)), 4)
+        self.assertEqual(
+            guild.create_category.await_args.args[0],
+            "2026-fall · Machine Learning",
+        )
+        self.assertEqual(len(self.database.get_course_channels(result.course.id)), 3)
         binding = self.database.get_bulk_channel_binding(
             bulk_definition.id, result.course.id
         )
@@ -95,6 +99,9 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         forum_tags = guild.create_forum.await_args.kwargs["available_tags"]
         self.assertEqual(forum_tags[0].name, "Question")
         self.assertEqual(forum_tags[-1].name, "Other")
+        self.assertIn("Resource", [tag.name for tag in forum_tags])
+        self.assertIn("Code", [tag.name for tag in forum_tags])
+        self.assertIn("Idea", [tag.name for tag in forum_tags])
 
     async def test_requires_manage_channels_before_mutating(self) -> None:
         guild = cast(
@@ -150,7 +157,6 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.database.set_course_category(course.id, 100)
         for key, channel_id, channel_type in (
             ("course_chat", 101, "text"),
-            ("materials", 102, "text"),
             ("discussions", 103, "forum"),
             ("study_room", 104, "voice"),
         ):
@@ -168,15 +174,10 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         moved_chat.name = "general-chat"
         moved_chat.category_id = 999
 
-        replacement_materials = MagicMock(spec=discord.TextChannel)
-        replacement_materials.id = 202
-        replacement_materials.name = "materials"
-        replacement_materials.category_id = 100
-
-        forum = MagicMock(spec=discord.ForumChannel)
-        forum.id = 103
-        forum.name = "discussions"
-        forum.category_id = 100
+        replacement_forum = MagicMock(spec=discord.ForumChannel)
+        replacement_forum.id = 203
+        replacement_forum.name = "discussions"
+        replacement_forum.category_id = 100
 
         voice = MagicMock(spec=discord.VoiceChannel)
         voice.id = 104
@@ -187,13 +188,12 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         extra.id = 205
         extra.name = "exam-help"
         extra.category_id = 100
-        category.channels = [replacement_materials, forum, voice, extra]
+        category.channels = [replacement_forum, voice, extra]
 
         channels = {
             100: category,
             101: moved_chat,
-            102: None,
-            103: forum,
+            103: None,
             104: voice,
         }
         guild = cast(
@@ -211,18 +211,18 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('category renamed to "ML manually renamed"', result.accepted_changes)
         self.assertIn('course_chat renamed to "general-chat"', result.accepted_changes)
         self.assertIn("course_chat moved outside the category", result.accepted_changes)
-        self.assertEqual(result.rebound, ("materials → #materials",))
+        self.assertEqual(result.rebound, ("discussions → #discussions",))
         self.assertEqual(result.additional, ("#exam-help (text)",))
         self.assertFalse(result.missing)
-        self.assertEqual(result.present_count, 5)
+        self.assertEqual(result.present_count, 4)
 
         managed = {
             channel.template_key: channel
             for channel in self.database.get_course_channels(course.id)
         }
-        self.assertEqual(managed["materials"].discord_channel_id, 202)
+        self.assertEqual(managed["discussions"].discord_channel_id, 203)
         observed = self.database.get_course_sync_channels(course.id)
-        self.assertEqual(len(observed), 5)
+        self.assertEqual(len(observed), 4)
 
     async def test_resuming_creation_keeps_a_manually_moved_channel(self) -> None:
         course = self.database.begin_course(
@@ -242,10 +242,6 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         moved_chat.name = "course-chat"
         moved_chat.category_id = 999
 
-        materials = MagicMock(spec=discord.TextChannel)
-        materials.id = 102
-        materials.name = "materials"
-        materials.category_id = 100
         forum = MagicMock(spec=discord.ForumChannel)
         forum.id = 103
         forum.name = "discussions"
@@ -270,7 +266,6 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
                         101: moved_chat,
                     }.get(channel_id)
                 ),
-                create_text_channel=AsyncMock(return_value=materials),
                 create_forum=AsyncMock(return_value=forum),
                 create_voice_channel=AsyncMock(return_value=voice),
             ),
@@ -286,7 +281,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.resumed)
         self.assertEqual(result.course.status, "active")
-        self.assertEqual(len(self.database.get_course_channels(course.id)), 4)
+        self.assertEqual(len(self.database.get_course_channels(course.id)), 3)
 
     async def test_bulk_add_previews_then_creates_and_tracks_channel(self) -> None:
         course = self.database.begin_course(1, self.semester, "Databases", None)
@@ -355,14 +350,14 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(CourseServiceError, "course template"):
             await self.service.add_bulk_channel(
                 guild,
-                name="materials",
+                name="course-chat",
                 channel_type="text",
                 topic=None,
                 confirm=True,
                 requested_by=42,
             )
 
-        self.assertIsNone(self.database.get_bulk_channel_definition(1, "materials"))
+        self.assertIsNone(self.database.get_bulk_channel_definition(1, "course-chat"))
 
     async def test_course_delete_keeps_untracked_channels_and_category(self) -> None:
         course = self.database.begin_course(1, self.semester, "Databases", None)

@@ -2,7 +2,7 @@ schema_version: 1
 
 course_template:
   category:
-    name: "{course_name}"
+    name: "{semester} · {course_name}"
 
   channels:
     course_chat:
@@ -10,21 +10,19 @@ course_template:
       name: course-chat
       topic: "General discussion for {course_name}."
 
-    materials:
-      type: text
-      name: materials
-      topic: "Notes, slides, links and learning materials for {course_name}."
-
     discussions:
       type: forum
       name: discussions
       topic: "Structured discussions for {course_name}."
       tags:
         - Question
+        - Resource
         - Assignment
         - Exam
         - Notes
+        - Code
         - Project
+        - Idea
         - Important
         - Other
 
