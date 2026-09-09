@@ -23,6 +23,11 @@ course_group = app_commands.Group(
     guild_only=True,
     default_permissions=discord.Permissions(administrator=True),
 )
+course_channel_group = app_commands.Group(
+    name="channel",
+    description="Manage channels shared by every managed course.",
+    parent=course_group,
+)
 
 
 @course_group.command(name="create", description="Create a managed course structure.")
@@ -184,6 +189,227 @@ async def sync(
         message = "\n".join(lines)
 
     await interaction.edit_original_response(content=_fit_discord_message(message))
+
+
+@course_group.command(name="delete", description="Safely delete a managed course.")
+@app_commands.describe(
+    name="Managed course name",
+    confirm="Set true after reviewing the deletion preview",
+)
+async def delete(
+    interaction: discord.Interaction,
+    name: app_commands.Range[str, 1, 100],
+    confirm: bool = False,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        result = await bot.course_service.delete_course(
+            guild,
+            name=name,
+            confirm=confirm,
+            requested_by=interaction.user.id,
+        )
+    except CourseServiceError as error:
+        await interaction.edit_original_response(content=f"❌ {error}")
+        return
+
+    if not result.confirmed:
+        lines = [
+            "**Course deletion preview**",
+            f"Course: **{result.course.name}**",
+            f"Managed channels to delete: {len(result.managed_live)}",
+            f"Already missing managed channels: {len(result.managed_missing)}",
+            "Category: "
+            + ("will be deleted" if result.category_will_delete else "will be kept"),
+        ]
+        _append_sync_section(lines, "Managed resources", result.managed_live)
+        _append_sync_section(
+            lines, "Manual/untracked channels that will be kept", result.manual_kept
+        )
+        lines.extend(
+            (
+                "",
+                "Nothing was deleted. Run the same command with `confirm:true` "
+                "to apply this exact safety policy.",
+            )
+        )
+    else:
+        icon = "✅" if result.record_removed else "⚠️"
+        lines = [
+            f"{icon} Course deletion {'completed' if result.record_removed else 'incomplete'}",
+            f"Course: **{result.course.name}**",
+        ]
+        _append_sync_section(lines, "Deleted", result.deleted)
+        _append_sync_section(lines, "Manual channels kept", result.manual_kept)
+        _append_sync_section(lines, "Failures; retry safely", result.failures, warning=True)
+        if not result.record_removed:
+            lines.extend(("", "The course record was kept so the command can be retried."))
+    await interaction.edit_original_response(
+        content=_fit_discord_message("\n".join(lines))
+    )
+
+
+@course_channel_group.command(
+    name="add-all", description="Add a managed channel to every course."
+)
+@app_commands.describe(
+    name="Shared channel name",
+    channel_type="Discord channel type",
+    topic="Optional text or forum topic",
+    confirm="Set true after reviewing the preview",
+)
+@app_commands.choices(
+    channel_type=[
+        app_commands.Choice(name="Text", value="text"),
+        app_commands.Choice(name="Forum", value="forum"),
+        app_commands.Choice(name="Voice", value="voice"),
+    ]
+)
+async def add_all_channel(
+    interaction: discord.Interaction,
+    name: app_commands.Range[str, 1, 100],
+    channel_type: app_commands.Choice[str],
+    topic: app_commands.Range[str, 1, 1024] | None = None,
+    confirm: bool = False,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        result = await bot.course_service.add_bulk_channel(
+            guild,
+            name=name,
+            channel_type=channel_type.value,
+            topic=topic,
+            confirm=confirm,
+            requested_by=interaction.user.id,
+        )
+    except CourseServiceError as error:
+        await interaction.edit_original_response(content=f"❌ {error}")
+        return
+
+    heading = (
+        "✅ Bulk channel operation completed"
+        if result.confirmed
+        else "**Bulk channel addition preview**"
+    )
+    lines = [
+        heading,
+        f"Channel: **{result.name}** ({result.channel_type})",
+        f"Managed courses: {result.course_count}",
+    ]
+    if result.confirmed:
+        lines.append(f"Created now: {len(result.created)}")
+    else:
+        lines.append(f"Would create: {len(result.create)}")
+    _append_sync_section(lines, "Courses to create in", result.create)
+    _append_sync_section(lines, "Courses to reconnect", result.reconnect)
+    _append_sync_section(lines, "Already present", result.already_present)
+    _append_sync_section(lines, "Created", result.created)
+    _append_sync_section(lines, "Skipped conflicts", result.conflicts, warning=True)
+    if not result.confirmed:
+        lines.extend(
+            (
+                "",
+                "Nothing was changed. Run the same command with `confirm:true` "
+                "to create and remember this channel for current and future courses.",
+            )
+        )
+    await interaction.edit_original_response(
+        content=_fit_discord_message("\n".join(lines))
+    )
+
+
+@course_channel_group.command(
+    name="delete-all", description="Delete one tracked shared channel from every course."
+)
+@app_commands.describe(
+    name="Previously added shared channel name",
+    confirm="Set true after reviewing the deletion preview",
+)
+async def delete_all_channel(
+    interaction: discord.Interaction,
+    name: app_commands.Range[str, 1, 100],
+    confirm: bool = False,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        result = await bot.course_service.delete_bulk_channel(
+            guild,
+            name=name,
+            confirm=confirm,
+            requested_by=interaction.user.id,
+        )
+    except CourseServiceError as error:
+        await interaction.edit_original_response(content=f"❌ {error}")
+        return
+
+    if not result.confirmed:
+        lines = [
+            "**Bulk channel deletion preview**",
+            f"Channel: **{result.definition.name}** ({result.definition.channel_type})",
+            f"Tracked live channels to delete: {len(result.live)}",
+            f"Already missing tracked channels: {len(result.missing)}",
+        ]
+        _append_sync_section(lines, "Courses affected", result.live)
+        lines.extend(
+            (
+                "",
+                "Nothing was deleted. Run the same command with `confirm:true`. "
+                "Only stable IDs previously tracked by `add-all` will be deleted.",
+            )
+        )
+    else:
+        icon = "✅" if result.definition_removed else "⚠️"
+        lines = [
+            f"{icon} Bulk channel deletion "
+            f"{'completed' if result.definition_removed else 'incomplete'}",
+            f"Channel: **{result.definition.name}**",
+        ]
+        _append_sync_section(lines, "Deleted from courses", result.deleted)
+        _append_sync_section(lines, "Already missing", result.missing)
+        _append_sync_section(lines, "Failures; retry safely", result.failures, warning=True)
+    await interaction.edit_original_response(
+        content=_fit_discord_message("\n".join(lines))
+    )
+
+
+@course_channel_group.command(
+    name="list", description="List channels shared across managed courses."
+)
+async def list_shared_channels(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    definitions = bot.database.list_bulk_channel_definitions(guild.id)
+    if not definitions:
+        message = "No shared course channels are managed."
+    else:
+        lines = ["**Shared course channels**"]
+        for definition in definitions[:50]:
+            tracked = len(bot.database.list_bulk_channel_bindings(definition.id))
+            topic = f" — {definition.topic}" if definition.topic else ""
+            lines.append(
+                f"- **{definition.name}** ({definition.channel_type}), "
+                f"tracked in {tracked} course(s){topic}"
+            )
+        if len(definitions) > 50:
+            lines.append(f"- … and {len(definitions) - 50} more")
+        message = "\n".join(lines)
+    await interaction.response.send_message(
+        _fit_discord_message(message), ephemeral=True
+    )
 
 
 def _format_sync_details(result: CourseSyncResult) -> str:

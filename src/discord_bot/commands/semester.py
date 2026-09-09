@@ -56,3 +56,54 @@ async def list_semesters(interaction: discord.Interaction) -> None:
             lines.append(f"- … and {len(semesters) - 50} more")
         message = "**Managed semesters**\n" + "\n".join(lines)
     await interaction.response.send_message(message, ephemeral=True)
+
+
+@semester_group.command(name="delete", description="Delete an empty managed semester.")
+@app_commands.describe(
+    name="Managed semester name",
+    confirm="Set true after reviewing the deletion preview",
+)
+async def delete(
+    interaction: discord.Interaction,
+    name: app_commands.Range[str, 1, 100],
+    confirm: bool = False,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    try:
+        clean_name = clean_entity_name(name, "Semester name", 100)
+    except CourseServiceError as error:
+        await interaction.response.send_message(f"❌ {error}", ephemeral=True)
+        return
+
+    semester = bot.database.get_semester(guild.id, clean_name)
+    if semester is None:
+        await interaction.response.send_message(
+            f'❌ Semester "{clean_name}" is not managed. Nothing was deleted.',
+            ephemeral=True,
+        )
+        return
+    course_count = bot.database.count_courses_in_semester(semester.id)
+    if course_count:
+        await interaction.response.send_message(
+            f'❌ Semester "{semester.name}" still contains {course_count} managed '
+            "course(s). Delete those courses explicitly first.",
+            ephemeral=True,
+        )
+        return
+    if not confirm:
+        await interaction.response.send_message(
+            f'**Deletion preview**\nSemester: **{semester.name}**\n'
+            "Discord resources: none\n\nNothing was deleted. Run the same command "
+            "with `confirm:true` to delete the local semester record.",
+            ephemeral=True,
+        )
+        return
+
+    if bot.database.delete_semester(semester.id):
+        message = f'✅ Semester deleted: **{semester.name}**'
+    else:
+        message = "❌ The semester changed before deletion. Nothing was deleted."
+    await interaction.response.send_message(message, ephemeral=True)

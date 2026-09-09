@@ -39,11 +39,17 @@ class AdminBotTests(unittest.IsolatedAsyncioTestCase):
             [command.name for command in commands[0].commands], ["status"]
         )
         self.assertEqual(
-            [command.name for command in commands[1].commands], ["create", "list"]
+            [command.name for command in commands[1].commands],
+            ["create", "list", "delete"],
         )
         self.assertEqual(
             [command.name for command in commands[2].commands],
-            ["create", "list", "info", "sync"],
+            ["channel", "create", "list", "info", "sync", "delete"],
+        )
+        channel_group = commands[2].commands[0]
+        self.assertEqual(
+            [command.name for command in channel_group.commands],
+            ["add-all", "delete-all", "list"],
         )
         self.assertTrue(
             all(command.default_permissions.administrator for command in commands)

@@ -22,10 +22,12 @@ A jelenlegi MVP részei:
 - szemeszterek létrehozása és listázása;
 - kurzusok létrehozása, listázása, lekérdezése és a Discord állapotát elsődlegesnek
   tekintő szinkronizálása;
+- kezelt kurzusok és üres szemeszterek előnézetes törlése;
+- nyilvántartott közös csatornák létrehozása és törlése minden kezelt kurzusban;
 - privát diagnosztikai `/server status` parancs.
 
-A szerepkörkezelés, archiválás/visszaállítás, törlés és a teljes szerverstruktúra
-kezelése még nincs megvalósítva.
+A szerepkörkezelés, archiválás/visszaállítás, tömeges kurzusimport és a teljes
+szerverstruktúra kezelése még nincs megvalósítva.
 
 Angol dokumentáció: [README.md](README.md)
 
@@ -92,10 +94,10 @@ kiszivárog, azonnal cseréld le.
 
 Az adminisztrációs munkamenet végén állítsd le a botot `Ctrl+C`-vel. A helyi
 SQLite adatbázis a `data/` könyvtárba kerül, és szándékosan nincs Gitben követve.
-Az első `0.3.0` indításkor a meglévő adatbázis helyben megkapja az új
-szinkronpillanatkép-táblákat; a meglévő szemeszterek, kurzusok és
-erőforrás-azonosítók megmaradnak. Ettől függetlenül az első éles indítás előtt
-ajánlott másolatot készíteni a `data/bot.db` fájlról.
+Az első `0.4.0` indításkor a meglévő adatbázis helyben megkapja az új, közös
+csatornákat nyilvántartó táblákat; a meglévő szemeszterek, kurzusok,
+erőforrás-azonosítók és szinkronpillanatképek megmaradnak. Ettől függetlenül az
+első éles indítás előtt ajánlott másolatot készíteni a `data/bot.db` fájlról.
 
 ## Első használat
 
@@ -109,6 +111,8 @@ ajánlott másolatot készíteni a `data/bot.db` fájlról.
 5. Ellenőrizd a `/course info name:Machine Learning` paranccsal.
 6. Kézi Discord-módosítás után futtasd a `/course sync name:Machine Learning`
    parancsot, vagy a `name` elhagyásával szinkronizáld az összes kezelt kurzust.
+7. A törlési és tömeges műveleteket először megerősítés nélkül nézd meg. Csak a
+   privát előnézet átnézése után ismételd meg `confirm:true` értékkel.
 
 A kurzus létrehozásakor egy kategória és a következő struktúra készül:
 
@@ -133,6 +137,8 @@ szükséges a parancsot futtató felhasználónál.
 - `/semester create name:<név>` — helyi kezelt szemeszter létrehozása. Discord
   kategóriát nem hoz létre.
 - `/semester list` — a szerver kezelt szemesztereinek listázása.
+- `/semester delete name:<név> [confirm:true]` — üres helyi szemeszterrekord
+  előnézete, majd törlése. Ha kurzus van benne, a bot megtagadja a műveletet.
 - `/course create name:<név> semester:<szemeszter> [code:<kód>]` — a konfigurált
   Discord-kurzusstruktúra létrehozása és azonosítóinak mentése.
 - `/course list [semester:<szemeszter>]` — minden kezelt kurzus listázása vagy
@@ -142,6 +148,16 @@ szükséges a parancsot futtató felhasználónál.
 - `/course sync [name:<név>]` — a Discord aktuális állapotának elfogadása és helyi
   pillanatképének mentése egy kurzusnál, illetve a `name` elhagyásakor minden
   kezelt kurzusnál, a Discord módosítása nélkül.
+- `/course delete name:<név> [confirm:true]` — előnézet, majd a kurzus stabil
+  ID-val nyilvántartott erőforrásainak és helyi rekordjának törlése, a kézi
+  csatornák megtartásával.
+- `/course channel add-all name:<név> channel_type:<Text|Forum|Voice>
+  [topic:<téma>] [confirm:true]` — közös csatorna előnézete, majd létrehozása és
+  nyilvántartása minden kezelt kurzusban.
+- `/course channel delete-all name:<név> [confirm:true]` — előnézet, majd csak az
+  adott közös csatornához korábban eltárolt stabil ID-k törlése.
+- `/course channel list` — a közös definíciók és a hozzájuk jelenleg nyilvántartott
+  kurzuscsatornák darabszámának listázása.
 
 A kurzus- és szemeszternevek összehasonlítása nem érzékeny a kis- és nagybetűkre.
 Egy befejezett létrehozási művelet ismétlése nem készít másolatot. Ha a Discord
@@ -188,8 +204,80 @@ között sem találgathat biztonságosan. Ezek a helyzetek hiányzó vagy nem
 egyértelmű eredményt adnak, illetve kézi beállítást igényelnek; romboló javítást
 nem engednek.
 
-Jelenleg nincs törlési, archiválási, visszaállítási vagy a Discordot módosító
-szinkronizálási parancs.
+Jelenleg nincs archiválási, visszaállítási vagy a Discordot módosító
+szinkronizálási parancs. Törlés csak az alább dokumentált, szűk célú, előnézetes
+parancsokkal lehetséges.
+
+## Közös csatornák minden kurzusban
+
+Ezt használd, ha minden jelenlegi és jövőbeli kezelt kurzushoz ugyanaz a további
+csatorna kell. Először kérj előnézetet:
+
+```text
+/course channel add-all name:announcements channel_type:Text topic:Shared announcements
+```
+
+Az előnézet felsorolja, mely kurzusoknál hozna létre vagy kapcsolna vissza
+csatornát, mit hagyna ki, illetve hol van ütközés. Ekkor még semmi nem változik.
+Ha megfelelő, ismételd meg megerősítéssel:
+
+```text
+/course channel add-all name:announcements channel_type:Text topic:Shared announcements confirm:true
+```
+
+A definíció az SQLite-adatbázisba kerül. A meglévő kezelt kurzusok megkapják a
+csatornát, ahol elérhető a kategóriájuk, és a későbbi `/course create` műveletek
+is létrehozzák. A parancs biztonságosan ismételhető: az élő, nyilvántartott
+csatornákat nem duplikálja. Azonos nevű, nem nyilvántartott vagy nem egyértelmű
+csatornánál automatikus átvétel helyett ütközést jelez. Az alapsablon által már
+használt csatornanevet elutasítja. A fórumhoz Community szükséges;
+hangcsatornának nem lehet témája.
+
+A tárolt közös definíciókat bármikor lekérdezheted a `/course channel list`
+paranccsal.
+
+Az adott közös csatorna eltávolításához először kérj előnézetet, majd erősítsd meg:
+
+```text
+/course channel delete-all name:announcements
+/course channel delete-all name:announcements confirm:true
+```
+
+A törlés kizárólag a közös definícióhoz eltárolt Discord ID-kat célozza, akkor
+is, ha a nyilvántartott csatornát kézzel átnevezték vagy áthelyezték. Egy kézzel
+létrehozott, azonos nevű csatornát nem választ ki. A sikeres kapcsolatok a művelet
+közben törlődnek a nyilvántartásból; részleges Discord-hiba után a parancs
+ismétlése csak a hátralévő munkát folytatja. Befejezés után az új kurzusok már nem
+kapják meg ezt a definíciót.
+
+## Biztonságos törlés
+
+A kurzustörlés mindig kétlépcsős:
+
+```text
+/course delete name:Machine Learning
+/course delete name:Machine Learning confirm:true
+```
+
+A privát előnézet felsorolja az élő nyilvántartott erőforrásokat, a már hiányzó
+elemeket, a megtartandó kézi/nem nyilvántartott csatornákat, és azt, hogy a
+kategória törlődik-e. Minden stabil ID-val nyilvántartott sablon- és közös
+csatorna a megerősített törlés célpontja, akkor is, ha kézzel átnevezték vagy
+máshová helyezték. Ismeretlen csatornát a bot soha nem töröl. Ha a
+kurzuskategóriában kézi csatorna marad, a kategória megmarad és nem kezelt
+kategóriává válik; az üres kategória törlődik. A helyi kurzusrekord csak az összes
+szükséges Discord-törlés sikere után tűnik el. Részleges hiba esetén megmarad a
+biztonságos újrapróbáláshoz.
+
+Szemeszter csak azután törölhető, hogy minden kezelt kurzusa eltűnt:
+
+```text
+/semester delete name:2026-fall
+/semester delete name:2026-fall confirm:true
+```
+
+A szemesztertörlés csak az üres helyi szemeszterrekordot távolítja el; nem töröl
+Discord-erőforrást, és nem törli automatikusan a kurzusokat.
 
 ## A kurzussablon konfigurálása
 
@@ -231,8 +319,9 @@ uv run python -m unittest discover -s tests
 
 A tesztcsomag offline fut: Discord-kapcsolat nélkül ellenőrzi a konfigurációt, a
 parancsregisztrációt, az adminisztrátori jogosultság-ellenőrzést, a sablon
-feldolgozását, az SQLite-adatmentést és a kurzuslétrehozási folyamatot. A
-felhasználói működés módosítása után továbbra is ajánlott egy utolsó próba külön
+feldolgozását, az SQLite-adatmentést, valamint a kurzuslétrehozási,
+szinkronizálási, közöscsatorna- és biztonságos törlési folyamatokat. A felhasználói
+működés módosítása után továbbra is ajánlott egy utolsó próba külön
 Discord-tesztszerveren.
 
 ## Biztonság és helyi állapot
@@ -247,8 +336,10 @@ Discord-tesztszerveren.
   parancsot kiadó adminisztrátor látja.
 - A bot nem olvassa az üzenetek tartalmát, és nem kér privilegizált Gateway
   intenteket.
-- Nincs törlési parancs. A bot névütközés esetén soha nem töröl és nem vesz át
-  csendben ismeretlen Discord-kategóriát vagy -csatornát.
+- A romboló parancsok változtatás nélküli előnézetet, majd `confirm:true`
+  megerősítést kérnek. Csak a bot stabil ID-val birtokolt elemeit célozzák, és
+  névegyezés miatt soha nem törölnek vagy vesznek át csendben ismeretlen
+  Discord-kategóriát vagy -csatornát.
 - A `data/bot.db` a bot helyi, kezelt állapotadatbázisa. Szemesztereket,
   kurzusokat, létrehozási állapotokat és stabil Discord-erőforrásazonosítókat
   tárol. Nem a Discord-üzenetek vagy a szerver tartalmának biztonsági mentése.
@@ -264,6 +355,10 @@ Discord-tesztszerveren.
 - Ha egy félbehagyott kurzus során létrehozott csatornát kézzel áthelyezel, a
   kurzuslétrehozás ismétlése stabil azonosító alapján felismeri és a választott
   helyén hagyja, miközben elkészíti a többi hiányzó erőforrást.
+- A közöscsatorna- és kurzustörlés menti az előrehaladást. Discord-hiba után
+  olvasd el az eredményt, majd ismételd meg ugyanazt a megerősített parancsot; a
+  már eltávolított ID-k kimaradnak, a megmaradt adatbázisrekord pedig védi a
+  hátralévő munkát.
 - A kezelt csatornák kézi módosítása után futtasd a `/course sync` parancsot. Az
   áthelyezést és átnevezést elfogadja, az egyértelmű pótlásokat visszakapcsolja, a
   megoldatlan eltéréseket pedig a Discord módosítása nélkül jelzi.
@@ -323,6 +418,18 @@ Discord-tesztszerveren.
   hiányzó vagy nem egyértelmű találatokról szóló figyelmeztetést; az adatbázis
   törlése eltávolíthatja az egyetlen helyi tulajdonosi nyilvántartást.
 
+### Egy tömeges vagy törlési művelet ütközést vagy részleges hibát jelez
+
+- Kézi módosítás után futtasd újra a parancsot `confirm:true` nélkül, hogy friss
+  előnézetet kapj.
+- Az azonos nevű, nem nyilvántartott csatorna szándékosan ütközés. Nevezd át,
+  vagy válassz másik közös csatornanevet az automatikus átvétel helyett.
+- Ha a Discord csak néhány létrehozást vagy törlést tagadott meg, javítsd a
+  jogosultságot, majd ismételd meg a megerősített parancsot. A tárolt ID-k miatt
+  a már elvégzett munka nem lesz név alapján megcélozva vagy vakon duplikálva.
+- Kézi csatornát tartalmazó kurzuskategória szándékosan megmarad a kurzus
+  törlése után. Ezek a csatornák és a kategória ezután nem kezelt elemek.
+
 ## Dokumentációs szabály
 
 A `README.md` és a `README.hu.md` a projekt használati kézikönyvei. Minden
@@ -340,11 +447,13 @@ felhasználó nem kéri kifejezetten a törlésüket.
 
 ## Ütemterv és jövőbeli lehetőségek
 
-Jelenlegi állapot: a `0.3.0` verzió adminisztrátoroknak szánt
+Jelenlegi állapot: a `0.4.0` verzió adminisztrátoroknak szánt
 szemeszterkezelést, sablonvezérelt kurzuslétrehozást és -lekérdezést, helyi,
 stabil azonosítós állapotmentést, biztonságos ütközéskezelést és
 szerverdiagnosztikát, valamint a Discord állapotát elsődlegesnek tekintő,
-Discordot nem módosító kurzusszinkronizálást tartalmaz. Az alábbi munkák
+Discordot nem módosító kurzusszinkronizálást tartalmaz. Emellett kezelt kurzusok
+és üres szemeszterek előnézetes törlését, valamint minden jelenlegi és jövőbeli
+kurzusra érvényes, nyilvántartott közös csatornákat is kezel. Az alábbi munkák
 opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
 
 ### 1. prioritás — a biztonságos szinkronizálási alap bővítése
@@ -357,8 +466,10 @@ opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
 - Vezetett feloldás a nem egyértelmű találatokhoz és részletesebb előzmények a
   szinkronizálási pillanatképek között.
 
-### 2. prioritás — szemeszter- és kurzuséletciklus
+### 2. prioritás — a szemeszter- és kurzuséletciklus bővítése
 
+- Elkészült a `0.4.0` verzióban: kezelt kurzusok és üres szemeszterek szűk célú,
+  előnézetes törlése, az ismeretlen/kézi erőforrások megtartásával.
 - Kurzus archiválása és visszaállítása azonnali végleges törlés nélkül.
 - Szemeszter-információ, aktuális szemeszter kijelölése, archiválás és
   visszaállítás.
@@ -376,6 +487,9 @@ opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
 
 ### 4. prioritás — jogosultságok és tömeges adminisztráció
 
+- Elkészült a `0.4.0` verzióban: közös csatorna előnézetes hozzáadása és törlése
+  minden kurzusban, az új kurzusokra is elmentve, kizárólag stabil ID-alapú
+  törléssel.
 - Hallgatói szerepkörök és konfigurálható jogosultságsablonok.
 - Óvatos jogosultság-szinkronizálás, először vizsgálattal és próbaüzemmel.
 - Ellenőrzött, tömeges szemeszter-/kurzusimport előzetesen átnézett CSV- vagy
@@ -388,8 +502,9 @@ opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
 - Szerverenkénti műveleti zárak az egymással átfedő módosítások megelőzésére.
 - Sorrendi SQLite-sémamigrációk és sablonverzió-/pillanatkép-követés.
 - Részletesebb auditnaplózás a tokenek és más titkok további kitakarásával.
-- Végleges törlés csak utolsó életciklus-funkcióként, előnézettel, szűk
-  célzással, kifejezett megerősítéssel és egyértelmű helyreállítási korlátokkal.
+- Minden jövőbeli, szélesebb visszaállítás vagy kaszkádos törlés maradjon külön a
+  jelenlegi szűk törlési parancsoktól, előnézettel, kifejezett megerősítéssel és
+  egyértelmű helyreállítási korlátokkal.
 
 ## Projektkontextus
 

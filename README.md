@@ -21,10 +21,12 @@ The current MVP provides:
 - local SQLite managed state;
 - semester creation and listing;
 - course creation, listing, inspection, and Discord-authoritative synchronization;
+- previewed deletion of managed courses and empty semesters;
+- tracked shared-channel creation and deletion across every managed course;
 - an ephemeral diagnostic `/server status` command.
 
-Role management, archive/restore, deletion, and server-wide structure management
-have not been implemented yet.
+Role management, archive/restore, bulk course import, and server-wide structure
+management have not been implemented yet.
 
 Hungarian documentation: [README.hu.md](README.hu.md)
 
@@ -87,10 +89,10 @@ is leaked.
 
 Stop the bot with `Ctrl+C` when the administration session is over. The SQLite
 database is stored locally under `data/` and is intentionally ignored by Git.
-On the first `0.3.0` start, an existing database is upgraded in place with the
-new synchronization snapshot tables; existing semesters, courses, and resource
-IDs are retained. A backup of `data/bot.db` before the first production start is
-still recommended.
+On the first `0.4.0` start, an existing database is upgraded in place with the
+new shared-channel tracking tables; existing semesters, courses, resource IDs,
+and sync snapshots are retained. A backup of `data/bot.db` before the first
+production start is still recommended.
 
 ## First-use workflow
 
@@ -104,6 +106,8 @@ still recommended.
 5. Inspect it with `/course info name:Machine Learning`.
 6. After making manual Discord changes, run `/course sync name:Machine Learning`,
    or omit `name` to synchronize all managed courses.
+7. Preview destructive and bulk operations without confirmation first. Repeat
+   with `confirm:true` only after reviewing the private result.
 
 Course creation produces one category containing:
 
@@ -128,6 +132,8 @@ have Discord's `Administrator` permission.
 - `/semester create name:<name>` — create a local managed semester. This does not
   create a Discord category.
 - `/semester list` — list the server's managed semesters.
+- `/semester delete name:<name> [confirm:true]` — preview, then delete an empty
+  local semester record. It refuses while the semester contains courses.
 - `/course create name:<name> semester:<semester> [code:<code>]` — create and
   persist the configured Discord course structure.
 - `/course list [semester:<semester>]` — list all managed courses or filter them
@@ -137,6 +143,15 @@ have Discord's `Administrator` permission.
 - `/course sync [name:<name>]` — accept the current Discord state for one course,
   or all managed courses when `name` is omitted, and save a local observation
   without changing Discord.
+- `/course delete name:<name> [confirm:true]` — preview, then delete the course's
+  stable-ID-tracked resources and local record while preserving manual channels.
+- `/course channel add-all name:<name> channel_type:<Text|Forum|Voice>
+  [topic:<topic>] [confirm:true]` — preview, then create and track one shared
+  channel in every managed course.
+- `/course channel delete-all name:<name> [confirm:true]` — preview, then delete
+  only the stable IDs previously tracked for that shared channel.
+- `/course channel list` — list shared definitions and how many course channels
+  are currently tracked for each.
 
 Course and semester names are matched case-insensitively. Repeating a completed
 create operation does not create a duplicate. If Discord fails partway through,
@@ -182,8 +197,76 @@ between multiple similar replacements. These cases produce a missing or
 ambiguous result, or require manual setup; they do not authorize destructive
 repair.
 
-There are currently no delete, archive, restore, or Discord-modifying
-synchronization commands.
+There are currently no archive, restore, or Discord-modifying synchronization
+commands. Deletion exists only through the narrow, previewed commands below.
+
+## Shared channels across all courses
+
+Use this when every current and future managed course needs the same additional
+channel. First request a preview:
+
+```text
+/course channel add-all name:announcements channel_type:Text topic:Shared announcements
+```
+
+The preview lists courses where the bot would create, reconnect, skip, or report
+a conflict. Nothing changes yet. If it is correct, repeat with confirmation:
+
+```text
+/course channel add-all name:announcements channel_type:Text topic:Shared announcements confirm:true
+```
+
+The definition is stored in SQLite. Existing managed courses receive the
+channel where their category is available, and later `/course create` operations
+also include it. Repeating the command is safe: tracked live channels are not
+duplicated. A same-name untracked or ambiguous channel is reported instead of
+being silently adopted. A name reserved by the base course template is rejected.
+Forum channels require Community; voice channels cannot have a topic.
+
+Use `/course channel list` at any time to see the stored shared definitions.
+
+To remove that tracked shared channel, preview and then confirm:
+
+```text
+/course channel delete-all name:announcements
+/course channel delete-all name:announcements confirm:true
+```
+
+Deletion targets only Discord IDs stored for this shared definition, even if a
+tracked channel was manually renamed or moved. A manually created same-name
+channel is not selected. Successful mappings are removed as the operation
+progresses; after a partial Discord error, repeating the command continues only
+the remaining tracked work. Once complete, future courses no longer receive the
+definition.
+
+## Safe deletion
+
+Course deletion is always a two-step operation:
+
+```text
+/course delete name:Machine Learning
+/course delete name:Machine Learning confirm:true
+```
+
+The private preview lists tracked live resources, already missing resources,
+manual/untracked channels that will be kept, and whether the category will be
+deleted. All template and shared channels tracked by stable ID belong to the
+confirmed deletion target, including tracked channels manually renamed or moved
+elsewhere. Unknown channels are never deleted. If a manual channel remains in
+the course category, the category is kept and becomes unmanaged; an empty
+category is deleted. The local course record is removed only after all required
+Discord deletions succeed. On partial failure it remains available for a safe
+retry.
+
+A semester can be deleted only after its managed courses are gone:
+
+```text
+/semester delete name:2026-fall
+/semester delete name:2026-fall confirm:true
+```
+
+Semester deletion removes only the local empty semester record and never deletes
+Discord resources or cascades into courses.
 
 ## Course template configuration
 
@@ -223,8 +306,9 @@ uv run python -m unittest discover -s tests
 
 The test suite is offline: it validates configuration, command registration,
 administrator authorization, template parsing, SQLite persistence, and the
-course creation workflow without connecting to Discord. A final test on a
-separate Discord server is still recommended after behavior changes.
+course creation, synchronization, bulk-channel, and safe-deletion workflows
+without connecting to Discord. A final test on a separate Discord server is
+still recommended after behavior changes.
 
 ## Safety and local state
 
@@ -237,8 +321,9 @@ separate Discord server is still recommended after behavior changes.
   visible only to the administrator who invoked it.
 - The bot does not read message contents and does not request privileged Gateway
   intents.
-- There is no delete command. The bot never deletes or silently adopts an
-  unknown Discord category or channel when it encounters a naming conflict.
+- Destructive commands require a no-change preview followed by `confirm:true`.
+  They target only stable IDs owned by the bot and never delete or silently
+  adopt an unknown Discord category or channel because of a name match.
 - `data/bot.db` is the bot's local managed-state database. It stores semesters,
   courses, provisioning states, and stable Discord resource IDs. It is not a
   backup of Discord messages or server content.
@@ -253,6 +338,9 @@ separate Discord server is still recommended after behavior changes.
 - If a channel created during an incomplete course is manually moved, retrying
   course creation recognizes it by stable ID and leaves it in its chosen
   location while completing the remaining resources.
+- Shared-channel and course deletion save progress. After a Discord error, read
+  the result and repeat the confirmed command; already removed IDs are skipped
+  and the retained database record protects the remaining work.
 - After manually changing managed channels, run `/course sync`. Moves and renames
   are accepted, unique replacements are reconnected, and unresolved drift is
   reported without modifying Discord.
@@ -308,6 +396,18 @@ separate Discord server is still recommended after behavior changes.
   and run `/course sync name:<course>`. Review its missing or ambiguous warnings;
   deleting the database may remove the only local ownership record.
 
+### A bulk or deletion operation reports conflicts or partial failure
+
+- Run the command without `confirm:true` again to obtain a fresh preview after
+  manual changes.
+- Same-name untracked channels are deliberately conflicts. Rename them or choose
+  a different shared-channel name rather than expecting automatic adoption.
+- If Discord denied only some deletions or creations, correct permissions and
+  repeat the confirmed command. Stored IDs prevent successfully completed work
+  from being targeted by name or blindly duplicated.
+- A course category containing manual channels is intentionally kept after
+  course deletion. Those channels and the remaining category are then unmanaged.
+
 ## Documentation policy
 
 `README.md` and `README.hu.md` are the user manuals for the project. Every
@@ -323,11 +423,13 @@ unless removal is explicitly requested.
 
 ## Roadmap and future candidates
 
-Current status: version `0.3.0` has administrator-only semester management,
+Current status: version `0.4.0` has administrator-only semester management,
 template-driven course creation and inspection, local stable-ID persistence,
 safe conflict handling, server diagnostics, and non-mutating,
-Discord-authoritative course synchronization. The following work remains
-optional and requires a separate explicit request.
+Discord-authoritative course synchronization. It also has previewed course and
+empty-semester deletion plus tracked shared channels for every current and
+future course. The following work remains optional and requires a separate
+explicit request.
 
 ### Priority 1 — extend the safe synchronization foundation
 
@@ -339,8 +441,10 @@ optional and requires a separate explicit request.
 - Add guided resolution for ambiguous matches and richer history between sync
   snapshots.
 
-### Priority 2 — semester and course lifecycle
+### Priority 2 — extend semester and course lifecycle
 
+- Completed in `0.4.0`: narrow, previewed deletion of managed courses and empty
+  semesters, preserving unknown/manual resources.
 - Add course archive and restore without immediate permanent deletion.
 - Add semester information, current-semester selection, archive, and restore.
 - Define clearly what archive changes on Discord and what remains in SQLite.
@@ -355,6 +459,8 @@ optional and requires a separate explicit request.
 
 ### Priority 4 — permissions and bulk administration
 
+- Completed in `0.4.0`: previewed shared-channel addition/removal across every
+  course, persisted for future courses and deleted only by tracked stable ID.
 - Add student roles and configurable permission templates.
 - Add cautious permission synchronization with inspection and dry-run first.
 - Add validated bulk semester/course import from a reviewed CSV or YAML plan.
@@ -366,8 +472,9 @@ optional and requires a separate explicit request.
 - Add per-server operation locks to prevent overlapping mutations.
 - Add sequential SQLite schema migrations and template version/snapshot tracking.
 - Expand audit logging while continuing to redact tokens and other secrets.
-- Consider permanent deletion only as a final lifecycle feature, with preview,
-  narrow targeting, explicit confirmation, and clear recovery limitations.
+- Keep any future broader reset or cascade deletion separate from the current
+  narrow deletion commands, with preview, explicit confirmation, and clear
+  recovery limitations.
 
 ## Project context
 

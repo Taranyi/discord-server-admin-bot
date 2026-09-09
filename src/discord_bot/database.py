@@ -40,6 +40,22 @@ class ObservedChannel:
     template_key: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class BulkChannelDefinition:
+    id: int
+    guild_id: int
+    name: str
+    channel_type: str
+    topic: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BulkChannelBinding:
+    definition_id: int
+    course_id: int
+    discord_channel_id: int
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -55,7 +71,7 @@ class Database:
                 );
 
                 INSERT INTO schema_metadata (version)
-                SELECT 2
+                SELECT 3
                 WHERE NOT EXISTS (SELECT 1 FROM schema_metadata);
 
                 CREATE TABLE IF NOT EXISTS semesters (
@@ -112,7 +128,29 @@ class Database:
                     PRIMARY KEY (course_id, discord_channel_id)
                 );
 
-                UPDATE schema_metadata SET version = 2 WHERE version < 2;
+                CREATE TABLE IF NOT EXISTS bulk_channel_definitions (
+                    id INTEGER PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL,
+                    channel_type TEXT NOT NULL
+                        CHECK (channel_type IN ('text', 'forum', 'voice')),
+                    topic TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (guild_id, normalized_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS bulk_course_channels (
+                    definition_id INTEGER NOT NULL
+                        REFERENCES bulk_channel_definitions(id) ON DELETE CASCADE,
+                    course_id INTEGER NOT NULL
+                        REFERENCES courses(id) ON DELETE CASCADE,
+                    discord_channel_id INTEGER NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (definition_id, course_id)
+                );
+
+                UPDATE schema_metadata SET version = 3 WHERE version < 3;
                 """
             )
             database.commit()
@@ -358,6 +396,203 @@ class Database:
                 (course_id,),
             ).fetchall()
             return [ObservedChannel(**dict(row)) for row in rows]
+        finally:
+            database.close()
+
+    def create_bulk_channel_definition(
+        self, guild_id: int, name: str, channel_type: str, topic: str | None
+    ) -> BulkChannelDefinition | None:
+        database = self._connect()
+        try:
+            try:
+                cursor = database.execute(
+                    """
+                    INSERT INTO bulk_channel_definitions (
+                        guild_id, name, normalized_name, channel_type, topic
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (guild_id, name, normalize_name(name), channel_type, topic),
+                )
+            except sqlite3.IntegrityError:
+                return None
+            database.commit()
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return the channel definition ID")
+            return BulkChannelDefinition(
+                id=cursor.lastrowid,
+                guild_id=guild_id,
+                name=name,
+                channel_type=channel_type,
+                topic=topic,
+            )
+        finally:
+            database.close()
+
+    def get_bulk_channel_definition(
+        self, guild_id: int, name: str
+    ) -> BulkChannelDefinition | None:
+        database = self._connect()
+        try:
+            row = database.execute(
+                """
+                SELECT id, guild_id, name, channel_type, topic
+                FROM bulk_channel_definitions
+                WHERE guild_id = ? AND normalized_name = ?
+                """,
+                (guild_id, normalize_name(name)),
+            ).fetchone()
+            return BulkChannelDefinition(**dict(row)) if row is not None else None
+        finally:
+            database.close()
+
+    def list_bulk_channel_definitions(
+        self, guild_id: int
+    ) -> list[BulkChannelDefinition]:
+        database = self._connect()
+        try:
+            rows = database.execute(
+                """
+                SELECT id, guild_id, name, channel_type, topic
+                FROM bulk_channel_definitions
+                WHERE guild_id = ? ORDER BY name COLLATE NOCASE
+                """,
+                (guild_id,),
+            ).fetchall()
+            return [BulkChannelDefinition(**dict(row)) for row in rows]
+        finally:
+            database.close()
+
+    def add_bulk_channel_binding(
+        self, definition_id: int, course_id: int, channel_id: int
+    ) -> None:
+        self._execute_write(
+            """
+            INSERT INTO bulk_course_channels (
+                definition_id, course_id, discord_channel_id
+            ) VALUES (?, ?, ?)
+            """,
+            (definition_id, course_id, channel_id),
+        )
+
+    def rebind_bulk_channel(
+        self, definition_id: int, course_id: int, channel_id: int
+    ) -> None:
+        self._execute_write(
+            """
+            UPDATE bulk_course_channels SET discord_channel_id = ?
+            WHERE definition_id = ? AND course_id = ?
+            """,
+            (channel_id, definition_id, course_id),
+        )
+
+    def get_bulk_channel_binding(
+        self, definition_id: int, course_id: int
+    ) -> BulkChannelBinding | None:
+        database = self._connect()
+        try:
+            row = database.execute(
+                """
+                SELECT definition_id, course_id, discord_channel_id
+                FROM bulk_course_channels
+                WHERE definition_id = ? AND course_id = ?
+                """,
+                (definition_id, course_id),
+            ).fetchone()
+            return BulkChannelBinding(**dict(row)) if row is not None else None
+        finally:
+            database.close()
+
+    def list_bulk_channel_bindings_for_course(
+        self, course_id: int
+    ) -> list[BulkChannelBinding]:
+        database = self._connect()
+        try:
+            rows = database.execute(
+                """
+                SELECT definition_id, course_id, discord_channel_id
+                FROM bulk_course_channels WHERE course_id = ?
+                """,
+                (course_id,),
+            ).fetchall()
+            return [BulkChannelBinding(**dict(row)) for row in rows]
+        finally:
+            database.close()
+
+    def list_bulk_channel_bindings(
+        self, definition_id: int
+    ) -> list[BulkChannelBinding]:
+        database = self._connect()
+        try:
+            rows = database.execute(
+                """
+                SELECT definition_id, course_id, discord_channel_id
+                FROM bulk_course_channels WHERE definition_id = ?
+                """,
+                (definition_id,),
+            ).fetchall()
+            return [BulkChannelBinding(**dict(row)) for row in rows]
+        finally:
+            database.close()
+
+    def remove_bulk_channel_binding(self, definition_id: int, course_id: int) -> None:
+        self._execute_write(
+            """
+            DELETE FROM bulk_course_channels
+            WHERE definition_id = ? AND course_id = ?
+            """,
+            (definition_id, course_id),
+        )
+
+    def delete_bulk_channel_definition(self, definition_id: int) -> bool:
+        database = self._connect()
+        try:
+            cursor = database.execute(
+                """
+                DELETE FROM bulk_channel_definitions
+                WHERE id = ? AND NOT EXISTS (
+                    SELECT 1 FROM bulk_course_channels WHERE definition_id = ?
+                )
+                """,
+                (definition_id, definition_id),
+            )
+            database.commit()
+            return cursor.rowcount == 1
+        finally:
+            database.close()
+
+    def count_courses_in_semester(self, semester_id: int) -> int:
+        database = self._connect()
+        try:
+            row = database.execute(
+                "SELECT COUNT(*) FROM courses WHERE semester_id = ?", (semester_id,)
+            ).fetchone()
+            return int(row[0])
+        finally:
+            database.close()
+
+    def delete_course(self, course_id: int) -> bool:
+        database = self._connect()
+        try:
+            cursor = database.execute("DELETE FROM courses WHERE id = ?", (course_id,))
+            database.commit()
+            return cursor.rowcount == 1
+        finally:
+            database.close()
+
+    def delete_semester(self, semester_id: int) -> bool:
+        database = self._connect()
+        try:
+            cursor = database.execute(
+                """
+                DELETE FROM semesters
+                WHERE id = ? AND NOT EXISTS (
+                    SELECT 1 FROM courses WHERE semester_id = ?
+                )
+                """,
+                (semester_id, semester_id),
+            )
+            database.commit()
+            return cursor.rowcount == 1
         finally:
             database.close()
 

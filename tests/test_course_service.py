@@ -27,6 +27,10 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_creates_and_persists_complete_course_structure(self) -> None:
+        bulk_definition = self.database.create_bulk_channel_definition(
+            1, "announcements", "text", "Shared announcements"
+        )
+        assert bulk_definition is not None
         category = MagicMock(spec=discord.CategoryChannel)
         category.id = 100
         category.name = "Machine Learning"
@@ -48,6 +52,11 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         voice.id = 104
         voice.name = "study-room"
         voice.category_id = category.id
+        announcements = MagicMock(spec=discord.TextChannel)
+        announcements.id = 105
+        announcements.name = "announcements"
+        announcements.category_id = category.id
+        text_channels.append(announcements)
 
         guild = cast(
             discord.Guild,
@@ -77,6 +86,12 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.course.status, "active")
         self.assertEqual(result.course.category_id, 100)
         self.assertEqual(len(self.database.get_course_channels(result.course.id)), 4)
+        binding = self.database.get_bulk_channel_binding(
+            bulk_definition.id, result.course.id
+        )
+        self.assertIsNotNone(binding)
+        assert binding is not None
+        self.assertEqual(binding.discord_channel_id, 105)
         forum_tags = guild.create_forum.await_args.kwargs["available_tags"]
         self.assertEqual(forum_tags[0].name, "Question")
         self.assertEqual(forum_tags[-1].name, "Other")
@@ -272,3 +287,257 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.resumed)
         self.assertEqual(result.course.status, "active")
         self.assertEqual(len(self.database.get_course_channels(course.id)), 4)
+
+    async def test_bulk_add_previews_then_creates_and_tracks_channel(self) -> None:
+        course = self.database.begin_course(1, self.semester, "Databases", None)
+        assert course is not None
+        self.database.set_course_category(course.id, 100)
+        self.database.mark_course_active(course.id)
+
+        category = MagicMock(spec=discord.CategoryChannel)
+        category.id = 100
+        category.name = "Databases"
+        category.channels = []
+        shared = MagicMock(spec=discord.TextChannel)
+        shared.id = 201
+        shared.name = "announcements"
+        shared.category_id = 100
+        create_text = AsyncMock(return_value=shared)
+        guild = cast(
+            discord.Guild,
+            SimpleNamespace(
+                id=1,
+                me=SimpleNamespace(
+                    guild_permissions=discord.Permissions(manage_channels=True)
+                ),
+                features=["COMMUNITY"],
+                get_channel=MagicMock(
+                    side_effect=lambda channel_id: category
+                    if channel_id == 100
+                    else None
+                ),
+                create_text_channel=create_text,
+            ),
+        )
+
+        preview = await self.service.add_bulk_channel(
+            guild,
+            name="announcements",
+            channel_type="text",
+            topic="Shared announcements",
+            confirm=False,
+            requested_by=42,
+        )
+        self.assertEqual(preview.create, ("Databases",))
+        create_text.assert_not_awaited()
+
+        applied = await self.service.add_bulk_channel(
+            guild,
+            name="announcements",
+            channel_type="text",
+            topic="Shared announcements",
+            confirm=True,
+            requested_by=42,
+        )
+        self.assertEqual(applied.created, ("Databases",))
+        definition = self.database.get_bulk_channel_definition(1, "announcements")
+        assert definition is not None
+        binding = self.database.get_bulk_channel_binding(definition.id, course.id)
+        assert binding is not None
+        self.assertEqual(binding.discord_channel_id, 201)
+
+    async def test_bulk_add_rejects_a_base_template_channel_name(self) -> None:
+        course = self.database.begin_course(1, self.semester, "Databases", None)
+        assert course is not None
+        self.database.set_course_category(course.id, 100)
+        guild = cast(discord.Guild, SimpleNamespace(id=1))
+
+        with self.assertRaisesRegex(CourseServiceError, "course template"):
+            await self.service.add_bulk_channel(
+                guild,
+                name="materials",
+                channel_type="text",
+                topic=None,
+                confirm=True,
+                requested_by=42,
+            )
+
+        self.assertIsNone(self.database.get_bulk_channel_definition(1, "materials"))
+
+    async def test_course_delete_keeps_untracked_channels_and_category(self) -> None:
+        course = self.database.begin_course(1, self.semester, "Databases", None)
+        assert course is not None
+        self.database.set_course_category(course.id, 100)
+        self.database.add_course_channel(course.id, "course_chat", 101, "text")
+        self.database.mark_course_active(course.id)
+
+        category = MagicMock(spec=discord.CategoryChannel)
+        category.id = 100
+        category.name = "Databases"
+        category.delete = AsyncMock()
+        managed = MagicMock(spec=discord.TextChannel)
+        managed.id = 101
+        managed.name = "course-chat"
+        managed.category_id = 100
+        managed.delete = AsyncMock()
+        manual = MagicMock(spec=discord.TextChannel)
+        manual.id = 199
+        manual.name = "manual-project"
+        manual.category_id = 100
+        manual.delete = AsyncMock()
+        category.channels = [managed, manual]
+        guild = cast(
+            discord.Guild,
+            SimpleNamespace(
+                id=1,
+                me=SimpleNamespace(
+                    guild_permissions=discord.Permissions(manage_channels=True)
+                ),
+                get_channel=MagicMock(
+                    side_effect=lambda channel_id: {
+                        100: category,
+                        101: managed,
+                    }.get(channel_id)
+                ),
+            ),
+        )
+
+        preview = await self.service.delete_course(
+            guild, name="Databases", confirm=False, requested_by=42
+        )
+        self.assertEqual(len(preview.manual_kept), 1)
+        managed.delete.assert_not_awaited()
+
+        deleted = await self.service.delete_course(
+            guild, name="Databases", confirm=True, requested_by=42
+        )
+        self.assertTrue(deleted.record_removed)
+        managed.delete.assert_awaited_once()
+        manual.delete.assert_not_awaited()
+        category.delete.assert_not_awaited()
+        self.assertIsNone(self.database.get_course(1, "Databases"))
+
+    async def test_course_delete_removes_an_empty_managed_category(self) -> None:
+        course = self.database.begin_course(1, self.semester, "Databases", None)
+        assert course is not None
+        self.database.set_course_category(course.id, 100)
+        category = MagicMock(spec=discord.CategoryChannel)
+        category.id = 100
+        category.name = "Databases"
+        category.channels = []
+        category.delete = AsyncMock()
+        guild = cast(
+            discord.Guild,
+            SimpleNamespace(
+                id=1,
+                me=SimpleNamespace(
+                    guild_permissions=discord.Permissions(manage_channels=True)
+                ),
+                get_channel=MagicMock(
+                    side_effect=lambda channel_id: category
+                    if channel_id == 100
+                    else None
+                ),
+            ),
+        )
+
+        result = await self.service.delete_course(
+            guild, name="Databases", confirm=True, requested_by=42
+        )
+
+        self.assertTrue(result.record_removed)
+        category.delete.assert_awaited_once()
+
+    async def test_bulk_delete_targets_only_the_stored_discord_id(self) -> None:
+        course = self.database.begin_course(1, self.semester, "Databases", None)
+        assert course is not None
+        definition = self.database.create_bulk_channel_definition(
+            1, "announcements", "text", None
+        )
+        assert definition is not None
+        self.database.add_bulk_channel_binding(definition.id, course.id, 201)
+
+        tracked = MagicMock(spec=discord.TextChannel)
+        tracked.id = 201
+        tracked.name = "manually-renamed-announcements"
+        tracked.delete = AsyncMock()
+        same_name_manual = MagicMock(spec=discord.TextChannel)
+        same_name_manual.id = 299
+        same_name_manual.name = "announcements"
+        same_name_manual.delete = AsyncMock()
+        guild = cast(
+            discord.Guild,
+            SimpleNamespace(
+                id=1,
+                me=SimpleNamespace(
+                    guild_permissions=discord.Permissions(manage_channels=True)
+                ),
+                get_channel=MagicMock(
+                    side_effect=lambda channel_id: tracked
+                    if channel_id == 201
+                    else None
+                ),
+            ),
+        )
+
+        preview = await self.service.delete_bulk_channel(
+            guild, name="announcements", confirm=False, requested_by=42
+        )
+        self.assertEqual(preview.live, ("Databases",))
+        tracked.delete.assert_not_awaited()
+
+        result = await self.service.delete_bulk_channel(
+            guild, name="announcements", confirm=True, requested_by=42
+        )
+        self.assertTrue(result.definition_removed)
+        tracked.delete.assert_awaited_once()
+        same_name_manual.delete.assert_not_awaited()
+        self.assertIsNone(
+            self.database.get_bulk_channel_definition(1, "announcements")
+        )
+
+    async def test_sync_accepts_a_moved_and_renamed_shared_channel(self) -> None:
+        course = self.database.begin_course(1, self.semester, "Databases", None)
+        assert course is not None
+        self.database.set_course_category(course.id, 100)
+        definition = self.database.create_bulk_channel_definition(
+            1, "announcements", "text", None
+        )
+        assert definition is not None
+        self.database.add_bulk_channel_binding(definition.id, course.id, 201)
+
+        category = MagicMock(spec=discord.CategoryChannel)
+        category.id = 100
+        category.name = "Databases"
+        category.channels = []
+        shared = MagicMock(spec=discord.TextChannel)
+        shared.id = 201
+        shared.name = "news"
+        shared.category_id = 999
+        guild = cast(
+            discord.Guild,
+            SimpleNamespace(
+                id=1,
+                categories=[category],
+                get_channel=MagicMock(
+                    side_effect=lambda channel_id: {
+                        100: category,
+                        201: shared,
+                    }.get(channel_id)
+                ),
+            ),
+        )
+
+        result = self.service.sync_courses(guild, name="Databases")[0]
+
+        self.assertIn(
+            'shared:announcements renamed to "news"', result.accepted_changes
+        )
+        self.assertIn(
+            "shared:announcements moved outside the category",
+            result.accepted_changes,
+        )
+        observed = self.database.get_course_sync_channels(course.id)
+        self.assertTrue(
+            any(channel.template_key == "shared:announcements" for channel in observed)
+        )

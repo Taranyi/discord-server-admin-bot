@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,3 +69,53 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual([channel.discord_channel_id for channel in observed], [202, 201])
         self.assertEqual(observed[0].template_key, None)
         self.assertEqual(observed[1].name, "sql-chat")
+
+    def test_only_empty_semesters_can_be_deleted(self) -> None:
+        semester = self.database.create_semester(1, "2026-fall")
+        assert semester is not None
+        course = self.database.begin_course(1, semester, "Databases", None)
+        assert course is not None
+
+        self.assertFalse(self.database.delete_semester(semester.id))
+        self.assertTrue(self.database.delete_course(course.id))
+        self.assertTrue(self.database.delete_semester(semester.id))
+
+    def test_upgrades_existing_database_without_losing_semesters(self) -> None:
+        path = Path(self.temporary_directory.name) / "old.db"
+        old = sqlite3.connect(path)
+        old.executescript(
+            """
+            CREATE TABLE schema_metadata (version INTEGER NOT NULL);
+            INSERT INTO schema_metadata (version) VALUES (2);
+            CREATE TABLE semesters (
+                id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (guild_id, normalized_name)
+            );
+            INSERT INTO semesters (guild_id, name, normalized_name)
+            VALUES (1, '2026-fall', '2026-fall');
+            """
+        )
+        old.commit()
+        old.close()
+
+        database = Database(path)
+        database.initialize()
+
+        self.assertIsNotNone(database.get_semester(1, "2026-fall"))
+        upgraded = sqlite3.connect(path)
+        version = upgraded.execute(
+            "SELECT version FROM schema_metadata"
+        ).fetchone()[0]
+        tables = {
+            row[0]
+            for row in upgraded.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        upgraded.close()
+        self.assertEqual(version, 3)
+        self.assertIn("bulk_channel_definitions", tables)
