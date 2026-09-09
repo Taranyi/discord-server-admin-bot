@@ -149,8 +149,14 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite-*
 env/
 venv/
 ENV/

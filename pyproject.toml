@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-bot"
+version = "0.1.0"
+description = "On-demand Discord server administration for an MSc community"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py~=2.7.1",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.scripts]
+discord-bot = "discord_bot.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
