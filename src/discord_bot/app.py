@@ -5,8 +5,13 @@ import logging
 import discord
 from discord import app_commands
 
+from .commands.course import course_group
+from .commands.semester import semester_group
 from .commands.server import server_group
 from .config import Settings
+from .course_service import CourseService
+from .database import Database
+from .template import CourseTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +47,7 @@ class AdminCommandTree(app_commands.CommandTree):
 
 
 class AdminBot(discord.Client):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, course_template: CourseTemplate) -> None:
         intents = discord.Intents.none()
         intents.guilds = True
         super().__init__(
@@ -51,9 +56,15 @@ class AdminBot(discord.Client):
         )
         self.settings = settings
         self.tree = AdminCommandTree(self)
+        self.database = Database(settings.database_path)
+        self.course_template = course_template
+        self.course_service = CourseService(self.database, course_template)
 
     async def setup_hook(self) -> None:
+        self.database.initialize()
         self.tree.add_command(server_group)
+        self.tree.add_command(semester_group)
+        self.tree.add_command(course_group)
         await self._sync_commands()
 
     async def _sync_commands(self) -> None:

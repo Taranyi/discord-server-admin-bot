@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from .app import AdminBot
 from .config import ConfigError, load_settings
 from .logging_config import configure_logging
+from .template import load_course_template
 
 
 def main() -> int:
@@ -14,6 +15,7 @@ def main() -> int:
 
     try:
         settings = load_settings()
+        course_template = load_course_template(settings.course_template_path)
     except ConfigError as error:
         logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
         logging.getLogger(__name__).error("Configuration error: %s", error)
@@ -23,7 +25,7 @@ def main() -> int:
     logger = logging.getLogger(__name__)
     logger.info("Starting Discord Bot")
 
-    bot = AdminBot(settings)
+    bot = AdminBot(settings, course_template)
     bot.run(settings.discord_token, log_handler=None)
     logger.info("Discord Bot stopped")
     return 0

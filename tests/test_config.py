@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import unittest
+from pathlib import Path
 
 from discord_bot.config import ConfigError, load_settings
 
@@ -21,6 +22,8 @@ class LoadSettingsTests(unittest.TestCase):
         self.assertEqual(settings.discord_guild_id, 123456789012345678)
         self.assertEqual(settings.command_sync, "guild")
         self.assertEqual(settings.log_level, logging.DEBUG)
+        self.assertEqual(settings.course_template_path, Path("config.yaml"))
+        self.assertEqual(settings.database_path, Path("data/bot.db"))
 
     def test_requires_token(self) -> None:
         with self.assertRaisesRegex(ConfigError, "DISCORD_TOKEN"):

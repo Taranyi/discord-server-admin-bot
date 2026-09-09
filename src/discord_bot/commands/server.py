@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import discord
 from discord import app_commands
+
+if TYPE_CHECKING:
+    from ..app import AdminBot
 
 server_group = app_commands.Group(
     name="server",
@@ -22,6 +27,8 @@ async def status(interaction: discord.Interaction) -> None:
 
     bot_member = guild.me
     permissions = bot_member.guild_permissions if bot_member else discord.Permissions.none()
+    bot = cast("AdminBot", interaction.client)
+    semester_count, course_count = bot.database.counts(guild.id)
     latency_ms = round(interaction.client.latency * 1000)
     community_enabled = "COMMUNITY" in guild.features
 
@@ -34,6 +41,10 @@ async def status(interaction: discord.Interaction) -> None:
             f"Community enabled: {'yes' if community_enabled else 'no'}",
             f"Manage Channels: {'yes' if permissions.manage_channels else 'no'}",
             f"Manage Roles: {'yes' if permissions.manage_roles else 'no'}",
+            "Configuration: OK",
+            "Database: OK",
+            f"Managed semesters: {semester_count}",
+            f"Managed courses: {course_count}",
         )
     )
     await interaction.response.send_message(message, ephemeral=True)

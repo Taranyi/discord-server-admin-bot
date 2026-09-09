@@ -157,6 +157,10 @@ data/*.db
 data/*.db-*
 data/*.sqlite
 data/*.sqlite-*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
 env/
 venv/
 ENV/

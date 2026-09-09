@@ -1,0 +1,33 @@
+schema_version: 1
+
+course_template:
+  category:
+    name: "{course_name}"
+
+  channels:
+    course_chat:
+      type: text
+      name: course-chat
+      topic: "General discussion for {course_name}."
+
+    materials:
+      type: text
+      name: materials
+      topic: "Notes, slides, links and learning materials for {course_name}."
+
+    discussions:
+      type: forum
+      name: discussions
+      topic: "Structured discussions for {course_name}."
+      tags:
+        - Question
+        - Assignment
+        - Exam
+        - Notes
+        - Project
+        - Important
+        - Other
+
+    study_room:
+      type: voice
+      name: study-room

@@ -4,6 +4,7 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast
 
 CommandSyncMode = Literal["off", "guild", "global"]
@@ -20,6 +21,8 @@ class Settings:
     discord_guild_id: int | None
     command_sync: CommandSyncMode
     log_level: int
+    course_template_path: Path
+    database_path: Path
 
 
 def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
@@ -52,6 +55,14 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         discord_guild_id=guild_id,
         command_sync=command_sync,
         log_level=log_level,
+        course_template_path=Path(
+            values.get("DISCORD_CONFIG_PATH", "config.yaml").strip()
+            or "config.yaml"
+        ),
+        database_path=Path(
+            values.get("DISCORD_DATABASE_PATH", "data/bot.db").strip()
+            or "data/bot.db"
+        ),
     )
 
 
