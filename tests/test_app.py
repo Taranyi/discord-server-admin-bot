@@ -37,15 +37,15 @@ class AdminBotTests(unittest.IsolatedAsyncioTestCase):
             ["server", "university", "semester", "course"],
         )
         self.assertEqual(
-            [command.name for command in commands[0].commands], ["status"]
+            [command.name for command in commands[0].commands], ["status", "sync"]
         )
         self.assertEqual(
             [command.name for command in commands[1].commands],
-            ["create", "list", "delete"],
+            ["create", "list", "sync", "delete"],
         )
         self.assertEqual(
             [command.name for command in commands[2].commands],
-            ["create", "list", "delete", "move"],
+            ["create", "sync", "list", "delete", "move"],
         )
         self.assertEqual(
             [command.name for command in commands[3].commands],
@@ -59,6 +59,12 @@ class AdminBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(command.default_permissions.administrator for command in commands)
         )
+        course_sync = commands[3].get_command("sync")
+        assert isinstance(course_sync, app_commands.Command)
+        name_parameter = next(
+            parameter for parameter in course_sync.parameters if parameter.name == "name"
+        )
+        self.assertTrue(name_parameter.required)
 
     async def test_allows_administrator_interactions(self) -> None:
         bot = self._create_bot()

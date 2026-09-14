@@ -9,8 +9,8 @@ from discord import app_commands
 from ..course_service import (
     CourseProvisionError,
     CourseServiceError,
-    CourseSyncResult,
 )
+from .sync_output import format_sync_results
 
 if TYPE_CHECKING:
     from ..app import AdminBot
@@ -175,13 +175,13 @@ async def info(
     name="sync", description="Accept and record the current Discord course state."
 )
 @app_commands.describe(
-    name="Optional managed course name; omit to sync matching courses",
+    name="Managed course name",
     university="Optional university filter",
     semester="Optional semester filter",
 )
 async def sync(
     interaction: discord.Interaction,
-    name: app_commands.Range[str, 1, 100] | None = None,
+    name: app_commands.Range[str, 1, 100],
     university: app_commands.Range[str, 1, 100] | None = None,
     semester: app_commands.Range[str, 1, 100] | None = None,
 ) -> None:
@@ -202,33 +202,9 @@ async def sync(
         await interaction.edit_original_response(content=f"❌ {error}")
         return
 
-    if len(results) == 1:
-        message = _format_sync_details(results[0])
-    else:
-        lines = [
-            f"✅ Saved the current Discord state for {len(results)} course(s).",
-            "No Discord resources were modified.",
-            "",
-        ]
-        for result in results[:40]:
-            warning_count = (
-                len(result.missing)
-                + len(result.ambiguous)
-                + int(result.category_issue is not None)
-            )
-            changes = len(result.accepted_changes) + len(result.rebound)
-            lines.append(
-                f"- **{result.course.university_name} → "
-                f"{result.course.semester_name} → {result.course.name}**: "
-                f"{result.present_count} channel(s), "
-                f"{changes} accepted change(s), {warning_count} warning(s)"
-            )
-        if len(results) > 40:
-            lines.append(f"- … and {len(results) - 40} more")
-        lines.extend(("", "Run `/course sync name:<course>` for full details."))
-        message = "\n".join(lines)
-
-    await interaction.edit_original_response(content=_fit_discord_message(message))
+    await interaction.edit_original_response(
+        content=format_sync_results(results, scope="the selected course")
+    )
 
 
 @course_group.command(name="delete", description="Safely delete a managed course.")
@@ -460,41 +436,6 @@ async def list_shared_channels(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(
         _fit_discord_message(message), ephemeral=True
     )
-
-
-def _format_sync_details(result: CourseSyncResult) -> str:
-    lines = [
-        "✅ Current Discord state saved locally",
-        "No Discord resources were modified.",
-        "",
-        f"**{result.course.name}**",
-        f"University: {result.course.university_name}",
-        f"Semester: {result.course.semester_name}",
-        f"Category: {result.category_name or 'missing'}",
-        f"Observed channels: {result.present_count}",
-    ]
-    if result.category_rebound:
-        lines.append("- Reconnected the course to its unique matching category.")
-    if result.category_issue:
-        lines.append(f"- ⚠️ Category: {result.category_issue}")
-    _append_sync_section(lines, "Accepted manual changes", result.accepted_changes)
-    _append_sync_section(lines, "Reconnected managed resources", result.rebound)
-    _append_sync_section(lines, "Additional channels kept and observed", result.additional)
-    _append_sync_section(lines, "Missing managed resources", result.missing, warning=True)
-    _append_sync_section(lines, "Ambiguous matches", result.ambiguous, warning=True)
-    if not any(
-        (
-            result.category_rebound,
-            result.category_issue,
-            result.accepted_changes,
-            result.rebound,
-            result.additional,
-            result.missing,
-            result.ambiguous,
-        )
-    ):
-        lines.extend(("", "No manual differences detected."))
-    return "\n".join(lines)
 
 
 def _append_sync_section(

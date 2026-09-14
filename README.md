@@ -20,7 +20,8 @@ The current MVP provides:
 - YAML-based course templates;
 - local SQLite managed state;
 - university and semester creation, listing, movement, and safe empty deletion;
-- course creation, listing, inspection, and Discord-authoritative synchronization;
+- course creation, listing, inspection, and Discord-authoritative synchronization
+  at server, university, semester, and course scope;
 - previewed deletion of managed courses, empty semesters, and empty universities;
 - tracked shared-channel creation and deletion across every managed course;
 - an ephemeral diagnostic `/server status` command.
@@ -108,8 +109,8 @@ move` to place migrated semesters under a university you created.
 5. Create a course: `/course create name:Machine Learning university:ELTE
    semester:2026-fall code:ML01`.
 6. Inspect it with `/course info name:Machine Learning`.
-7. After making manual Discord changes, run `/course sync name:Machine Learning`,
-   or omit `name` to synchronize all managed courses.
+7. After making manual Discord changes, run `/server sync` for the entire
+   managed hierarchy or `/course sync name:Machine Learning` for one course.
 8. Preview destructive and bulk operations without confirmation first. Repeat
    with `confirm:true` only after reviewing the private result.
 
@@ -152,14 +153,20 @@ have Discord's `Administrator` permission.
 
 - `/server status` — show connectivity, prerequisites, permissions, and managed
   object counts.
+- `/server sync` — inspect and save the current Discord state of every managed
+  course across every university and semester without modifying Discord.
 - `/university create name:<name>` — create a local managed university.
 - `/university list` — list universities and their semester counts.
+- `/university sync name:<name>` — inspect every managed course in all semesters
+  of one university without modifying Discord.
 - `/university delete name:<name> [confirm:true]` — preview, then delete an empty
   local university. It never deletes Discord resources.
 - `/semester create university:<university> name:<name>` — create a local
   semester under an existing university.
 - `/semester list [university:<university>]` — list semesters, optionally for one
   university.
+- `/semester sync name:<name> [university:<university>]` — inspect every course
+  in one semester; `university` is required only when the name is ambiguous.
 - `/semester move name:<name> from_university:<source>
   to_university:<destination> [confirm:true]` — preview, then move a semester in
   local managed state without renaming Discord categories.
@@ -171,9 +178,9 @@ have Discord's `Administrator` permission.
   managed courses.
 - `/course info name:<name> [university:<university>] [semester:<semester>]` —
   show stored Discord resource IDs and provisioning state.
-- `/course sync [name:<name>] [university:<university>]
-  [semester:<semester>]` — accept and record current Discord state for the
-  matching courses without changing Discord.
+- `/course sync name:<name> [university:<university>]
+  [semester:<semester>]` — accept and record current Discord state for exactly
+  one course without changing Discord.
 - `/course delete name:<name> [university:<university>]
   [semester:<semester>] [confirm:true]` — preview, then delete stable-ID-tracked
   course resources while preserving manual channels.
@@ -195,11 +202,21 @@ successful resource IDs remain stored and retrying the same command continues
 the incomplete course. Unknown categories and channels are reported as
 conflicts and are never deleted or silently adopted.
 
-### What course synchronization does
+### What synchronization does
 
-Discord is authoritative for `/course sync`. The command works even when the
-manual changes were made while the bot was offline: start the bot afterward and
-run the command. It then:
+Discord is authoritative for every sync command. They also work when manual
+changes were made while the bot was offline: start the bot afterward and select
+the appropriate scope:
+
+```text
+/server sync
+/university sync name:ELTE
+/semester sync name:2026-fall university:ELTE
+/course sync name:Machine Learning university:ELTE semester:2026-fall
+```
+
+The scopes cover, respectively, all managed courses, all courses under one
+university, all courses in one semester, or exactly one course. Each command:
 
 - follows stable Discord IDs, so manual renames and moves of known categories
   and channels are accepted automatically;
@@ -212,11 +229,11 @@ run the command. It then:
 - reports missing, wrong-type, or ambiguous resources for administrator review;
 - never creates, renames, moves, or deletes a Discord resource.
 
-With no filters, `/course sync` covers every course already managed by the bot.
-The optional `university` and `semester` values can narrow that set. If a named
-course exists in multiple locations, provide both filters; the bot refuses an
-ambiguous selection without changing Discord. It deliberately does not claim or
-inventory unrelated parts of the server.
+If a university, semester, or course name is ambiguous, the bot requests the
+missing parent selector and makes no changes. Sync deliberately does not claim
+or inventory unrelated parts of the server. Universities and semesters are
+local hierarchy metadata, so their sync commands inspect the managed Discord
+course categories and channels contained in that logical scope.
 An additional channel can safely coexist inside a managed course category, but
 it does not automatically become one of the template's required channels.
 The logical course name used in slash-command parameters remains unchanged when
@@ -224,7 +241,7 @@ its Discord category is manually renamed.
 
 This guarantees safe coexistence, not automatic interpretation of every
 possible manual edit. While the bot is offline no immediate synchronization
-occurs. After it starts, `/course sync` either accepts a known-ID change,
+occurs. After it starts, the selected sync command either accepts a known-ID change,
 reconnects one unique replacement, or reports the unresolved difference without
 changing Discord. Run it after manual changes and before future lifecycle
 operations.
@@ -495,7 +512,7 @@ unless removal is explicitly requested.
 
 ## Roadmap and future candidates
 
-Current status: version `0.5.0` has the administrator-only University →
+Current status: version `0.5.1` has the administrator-only University →
 Semester → Course hierarchy, scoped duplicate-name handling, safe migration
 of older managed state, template-driven course creation, stable-ID persistence,
 server diagnostics, and non-mutating Discord-authoritative synchronization. It
@@ -512,6 +529,8 @@ above.
 - Completed in `0.3.0`: `/course sync` accepts the current Discord course state,
   stores observations, reconnects only unique matches, and reports drift without
   changing Discord.
+- Completed in `0.5.1`: equivalent inspection-only sync entry points for the
+  whole managed server, one university, one semester, or one course.
 - Add a separate dry-run plan before any future option is allowed to apply the
   template back to Discord.
 - Add guided resolution for ambiguous matches and richer history between sync

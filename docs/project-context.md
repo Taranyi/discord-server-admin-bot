@@ -2240,11 +2240,30 @@ For an early version, `sync` can be simpler.
 
 The design principle is more important than feature completeness.
 
+As of `0.5.1`, synchronization has inspection-only entry points at every managed
+hierarchy level:
+
+```text
+/server sync
+/university sync
+/semester sync
+/course sync
+```
+
+They share the same conservative stable-ID inspection. The broader commands
+select more managed courses; they do not gain permission to modify unrelated
+Discord resources. `/course sync` requires a course name, avoiding the former
+ambiguity where omitting the name meant the whole server.
+
 ---
 
 # 56. `/server sync`
 
-Do not build this by simply looping over `/course sync` logic with no planning.
+The implemented `0.5.1` `/server sync` is deliberately inspection-only and saves
+an aggregate of the current state for all managed courses.
+
+Do not turn a future Discord-modifying server sync into a simple loop over
+course mutation logic with no planning.
 
 Eventually it may be useful to create a whole-server plan first so the administrator can understand the total impact.
 

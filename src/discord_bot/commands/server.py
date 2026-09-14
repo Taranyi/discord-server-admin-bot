@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING, cast
 import discord
 from discord import app_commands
 
+from ..course_service import CourseServiceError
+from .sync_output import format_sync_results
+
 if TYPE_CHECKING:
     from ..app import AdminBot
 
@@ -49,3 +52,22 @@ async def status(interaction: discord.Interaction) -> None:
         )
     )
     await interaction.response.send_message(message, ephemeral=True)
+
+
+@server_group.command(
+    name="sync", description="Inspect and save all managed course state."
+)
+async def sync(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        results = bot.course_service.sync_courses(guild)
+    except CourseServiceError as error:
+        await interaction.edit_original_response(content=f"❌ {error}")
+        return
+    await interaction.edit_original_response(
+        content=format_sync_results(results, scope="the managed server")
+    )

@@ -21,8 +21,9 @@ A jelenlegi MVP részei:
 - helyi SQLite kezelt állapot;
 - egyetemek és szemeszterek létrehozása, listázása, mozgatása és biztonságos
   üres törlése;
-- kurzusok létrehozása, listázása, lekérdezése és a Discord állapotát elsődlegesnek
-  tekintő szinkronizálása;
+- kurzusok létrehozása, listázása, lekérdezése és a Discord állapotát
+  elsődlegesnek tekintő szinkronizálása szerver-, egyetem-, szemeszter- és
+  kurzushatókörben;
 - kezelt kurzusok, üres szemeszterek és üres egyetemek előnézetes törlése;
 - nyilvántartott közös csatornák létrehozása és törlése minden kezelt kurzusban;
 - privát diagnosztikai `/server status` parancs.
@@ -115,8 +116,9 @@ a migrált szemesztereket egy általad létrehozott egyetem alá.
 5. Hozz létre egy kurzust: `/course create name:Machine Learning university:ELTE
    semester:2026-fall code:ML01`.
 6. Ellenőrizd a `/course info name:Machine Learning` paranccsal.
-7. Kézi Discord-módosítás után futtasd a `/course sync name:Machine Learning`
-   parancsot, vagy a `name` elhagyásával szinkronizáld az összes kezelt kurzust.
+7. Kézi Discord-módosítás után a teljes kezelt hierarchiához futtasd a
+   `/server sync`, egy kurzushoz pedig a `/course sync name:Machine Learning`
+   parancsot.
 8. A törlési és tömeges műveleteket először megerősítés nélkül nézd meg. Csak a
    privát előnézet átnézése után ismételd meg `confirm:true` értékkel.
 
@@ -162,14 +164,20 @@ szükséges a parancsot futtató felhasználónál.
 
 - `/server status` — kapcsolat, előfeltételek, jogosultságok és kezelt objektumok
   darabszáma.
+- `/server sync` — minden egyetem és szemeszter minden kezelt kurzusának aktuális
+  Discord-állapotát megvizsgálja és menti a Discord módosítása nélkül.
 - `/university create name:<név>` — helyi kezelt egyetem létrehozása.
 - `/university list` — egyetemek listázása a szemesztereik darabszámával.
+- `/university sync name:<név>` — az adott egyetem minden szemeszterének minden
+  kezelt kurzusát megvizsgálja a Discord módosítása nélkül.
 - `/university delete name:<név> [confirm:true]` — üres helyi egyetem
   előnézete, majd törlése; Discord-erőforrást nem töröl.
 - `/semester create university:<egyetem> name:<név>` — helyi szemeszter
   létrehozása egy meglévő egyetem alatt.
 - `/semester list [university:<egyetem>]` — szemeszterek listázása, opcionálisan
   egy egyetemre szűrve.
+- `/semester sync name:<név> [university:<egyetem>]` — az adott szemeszter minden
+  kurzusát megvizsgálja; az egyetem csak kétértelmű névnél kötelező.
 - `/semester move name:<név> from_university:<forrás>
   to_university:<cél> [confirm:true]` — szemeszter helyi áthelyezésének
   előnézete, majd végrehajtása a Discord-kategóriák átnevezése nélkül.
@@ -182,9 +190,9 @@ szükséges a parancsot futtató felhasználónál.
   kurzusok listázása vagy szűrése.
 - `/course info name:<név> [university:<egyetem>] [semester:<szemeszter>]` — az
   eltárolt Discord-erőforrásazonosítók és a létrehozási állapot megjelenítése.
-- `/course sync [name:<név>] [university:<egyetem>]
-  [semester:<szemeszter>]` — az aktuális Discord-állapot elfogadása és mentése
-  a megfelelő kurzusokhoz a Discord módosítása nélkül.
+- `/course sync name:<név> [university:<egyetem>]
+  [semester:<szemeszter>]` — pontosan egy kurzus aktuális Discord-állapotának
+  elfogadása és mentése a Discord módosítása nélkül.
 - `/course delete name:<név> [university:<egyetem>]
   [semester:<szemeszter>] [confirm:true]` — előnézet, majd a kurzus stabil
   ID-val nyilvántartott erőforrásainak törlése a kézi csatornák megtartásával.
@@ -206,11 +214,21 @@ hibázik, a sikeresen létrehozott erőforrások azonosítói megmaradnak, és
 ugyanaz a parancs folytatja a hiányos kurzust. Az ismeretlen kategóriákat és
 csatornákat a bot ütközésként jelzi; nem törli és nem veszi át őket automatikusan.
 
-### Mit csinál a kurzusszinkronizálás?
+### Mit csinál a szinkronizálás?
 
-A `/course sync` számára a Discord az elsődleges állapot. Akkor is működik, ha a
-kézi változtatások idején a bot nem futott: utána indítsd el, majd futtasd a
-parancsot. A művelet:
+Minden sync parancs számára a Discord az elsődleges állapot. Akkor is működnek,
+ha a kézi változtatások idején a bot nem futott: utána indítsd el, majd válaszd
+ki a megfelelő hatókört:
+
+```text
+/server sync
+/university sync name:ELTE
+/semester sync name:2026-fall university:ELTE
+/course sync name:Machine Learning university:ELTE semester:2026-fall
+```
+
+A parancsok rendre minden kezelt kurzust, egy egyetem minden kurzusát, egy
+szemeszter minden kurzusát, illetve pontosan egy kurzust vizsgálnak. Mindegyik:
 
 - stabil Discord-azonosítókat követ, ezért automatikusan elfogadja az ismert
   kategóriák és csatornák kézi átnevezését vagy áthelyezését;
@@ -224,11 +242,11 @@ parancsot. A művelet:
   adminisztrátor átnézhesse őket;
 - soha nem hoz létre, nevez át, helyez át vagy töröl Discord-erőforrást.
 
-A szűrők nélküli `/course sync` minden, a bot által már kezelt kurzust
-átvizsgál. Az opcionális `university` és `semester` értékekkel szűkíthető a
-kör. Ha egy megadott kurzusnév több helyen létezik, mindkét szűrőt add meg; a
-bot a kétértelmű kiválasztást a Discord módosítása nélkül elutasítja. A szerver
-ettől független részeit szándékosan nem sajátítja ki és nem leltározza.
+Ha egy egyetem-, szemeszter- vagy kurzusnév kétértelmű, a bot bekéri a hiányzó
+szülőt, és nem módosít semmit. A szinkronizálás szándékosan nem sajátítja ki
+és nem leltározza a szerver független részeit. Az egyetem és a szemeszter helyi
+hierarchia-metaadat, ezért sync parancsaik a logikai hatókörükbe tartozó kezelt
+Discord-kurzuskategóriákat és -csatornákat vizsgálják.
 Egy további csatorna biztonságosan megmaradhat egy kezelt kurzuskategóriában, de
 ettől nem válik automatikusan a sablon egyik kötelező csatornájává.
 A slash parancsok paramétereként használt logikai kurzusnév akkor sem változik
@@ -236,10 +254,10 @@ meg, ha a Discord-kategóriát kézzel átnevezed.
 
 Ez biztonságos együttműködést garantál, nem minden lehetséges kézi módosítás
 automatikus értelmezését. Amíg a bot offline, nem történik azonnali
-szinkronizálás. Elindítás után a `/course sync` elfogadja az ismert azonosítójú
-változást, visszakapcsol egyetlen egyértelmű pótlást, vagy a Discord módosítása
-nélkül jelzi a megoldatlan eltérést. Kézi módosítás után és későbbi
-életciklus-műveletek előtt futtasd le.
+szinkronizálás. Elindítás után a kiválasztott sync parancs elfogadja az ismert
+azonosítójú változást, visszakapcsol egyetlen egyértelmű pótlást, vagy a Discord
+módosítása nélkül jelzi a megoldatlan eltérést. Kézi módosítás után és
+későbbi életciklus-műveletek előtt futtasd le.
 
 A bot nem tud automatikusan helyreállni, ha elveszik a helyi adatbázisa,
 eltávolítják a szerverről, visszaállítják a tokenjét a `.env` frissítése nélkül,
@@ -527,7 +545,7 @@ felhasználó nem kéri kifejezetten a törlésüket.
 
 ## Ütemterv és jövőbeli lehetőségek
 
-Jelenlegi állapot: a `0.5.0` verzió adminisztrátoroknak szánt Egyetem →
+Jelenlegi állapot: a `0.5.1` verzió adminisztrátoroknak szánt Egyetem →
 Szemeszter → Kurzus hierarchiát, szintenként kezelt névazonosságot, a régi kezelt
 állapot biztonságos migrációját, sablonvezérelt kurzuslétrehozást, stabil
 azonosítós állapotmentést, szerverdiagnosztikát és Discordot nem módosító,
@@ -545,6 +563,8 @@ kurzusstruktúrát használja.
 - Elkészült a `0.3.0` verzióban: a `/course sync` elfogadja a Discord aktuális
   kurzusállapotát, pillanatképet ment, csak egyértelmű találatot kapcsol vissza,
   és a Discord módosítása nélkül jelzi az eltéréseket.
+- Elkészült a `0.5.1` verzióban: azonos, csak vizsgáló sync belépési pont a
+  teljes kezelt szerverhez, egy egyetemhez, egy szemeszterhez vagy egy kurzushoz.
 - Külön próbaüzemű terv hozzáadása, mielőtt bármely jövőbeli lehetőség
   visszaalkalmazhatná a sablont a Discordra.
 - Vezetett feloldás a nem egyértelmű találatokhoz és részletesebb előzmények a

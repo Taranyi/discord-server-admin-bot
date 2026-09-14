@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from ..course_service import CourseServiceError, clean_entity_name
+from .sync_output import format_sync_results
 
 if TYPE_CHECKING:
     from ..app import AdminBot
@@ -56,6 +57,61 @@ async def create(
             f'✅ Semester created: **{semester.university_name} → {semester.name}**'
         )
     await interaction.response.send_message(message, ephemeral=True)
+
+
+@semester_group.command(
+    name="sync", description="Inspect and save every course in one semester."
+)
+@app_commands.describe(
+    name="Managed semester name",
+    university="University containing the semester; optional if unambiguous",
+)
+async def sync(
+    interaction: discord.Interaction,
+    name: app_commands.Range[str, 1, 100],
+    university: app_commands.Range[str, 1, 100] | None = None,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return
+    bot = cast("AdminBot", interaction.client)
+    try:
+        clean_name = clean_entity_name(name, "Semester name", 100)
+    except CourseServiceError as error:
+        await interaction.response.send_message(f"❌ {error}", ephemeral=True)
+        return
+
+    matches = bot.database.find_semesters(guild.id, clean_name, university)
+    if not matches:
+        await interaction.response.send_message(
+            f'❌ Semester "{clean_name}" is not managed.', ephemeral=True
+        )
+        return
+    if len(matches) > 1:
+        await interaction.response.send_message(
+            f'❌ Semester "{clean_name}" exists under multiple universities. '
+            "Specify `university`.",
+            ephemeral=True,
+        )
+        return
+    semester = matches[0]
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        results = bot.course_service.sync_courses(
+            guild,
+            university_name=semester.university_name,
+            semester_name=semester.name,
+        )
+    except CourseServiceError as error:
+        await interaction.edit_original_response(content=f"❌ {error}")
+        return
+    await interaction.edit_original_response(
+        content=format_sync_results(
+            results,
+            scope=f'"{semester.university_name} → {semester.name}"',
+        )
+    )
 
 
 @semester_group.command(name="list", description="List managed semesters.")
