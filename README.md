@@ -19,9 +19,9 @@ The current MVP provides:
 - centralized administrator-only authorization for every command;
 - YAML-based course templates;
 - local SQLite managed state;
-- semester creation and listing;
+- university and semester creation, listing, movement, and safe empty deletion;
 - course creation, listing, inspection, and Discord-authoritative synchronization;
-- previewed deletion of managed courses and empty semesters;
+- previewed deletion of managed courses, empty semesters, and empty universities;
 - tracked shared-channel creation and deletion across every managed course;
 - an ephemeral diagnostic `/server status` command.
 
@@ -89,10 +89,12 @@ is leaked.
 
 Stop the bot with `Ctrl+C` when the administration session is over. The SQLite
 database is stored locally under `data/` and is intentionally ignored by Git.
-On the first `0.4.0` or later start, an existing database is upgraded in place
-with the new shared-channel tracking tables; existing semesters, courses,
-resource IDs, and sync snapshots are retained. A backup of `data/bot.db` before
-the first production start is still recommended.
+On the first `0.5.0` start, an existing database is upgraded in place with the
+university hierarchy; existing semesters, courses, resource IDs, shared-channel
+state, and sync snapshots are retained. Existing semesters are placed under a
+local `Unassigned` university because their real university cannot be inferred.
+Back up `data/bot.db` before the first production start, then use `/semester
+move` to place migrated semesters under a university you created.
 
 ## First-use workflow
 
@@ -100,27 +102,31 @@ the first production start is still recommended.
    the commands.
 2. Run `/server status` and verify that Community and Manage Channels both show
    `yes`.
-3. Create a semester, for example `/semester create name:2026-fall`.
-4. Create a course, for example `/course create name:Machine Learning
+3. Create a university, for example `/university create name:ELTE`.
+4. Create a semester under it: `/semester create university:ELTE
+   name:2026-fall`.
+5. Create a course: `/course create name:Machine Learning university:ELTE
    semester:2026-fall code:ML01`.
-5. Inspect it with `/course info name:Machine Learning`.
-6. After making manual Discord changes, run `/course sync name:Machine Learning`,
+6. Inspect it with `/course info name:Machine Learning`.
+7. After making manual Discord changes, run `/course sync name:Machine Learning`,
    or omit `name` to synchronize all managed courses.
-7. Preview destructive and bulk operations without confirmation first. Repeat
+8. Preview destructive and bulk operations without confirmation first. Repeat
    with `confirm:true` only after reviewing the private result.
 
-Course creation produces one semester-labelled category containing:
+Course creation produces one university- and semester-labelled category:
 
 ```text
-2026-fall · Machine Learning
+ELTE · 2026-fall · Machine Learning
 ├── #course-chat
 ├── discussions (forum)
 └── study-room (voice)
 ```
 
 The forum tags, channel names, topics, and category format come from
-`config.yaml`. The default `{semester} · {course_name}` category format keeps
-multiple semesters visibly distinguishable in Discord's channel list.
+`config.yaml`. Discord categories cannot be nested, so the database stores the
+real University → Semester → Course hierarchy while the default
+`{university} · {semester} · {course_name}` category format keeps it visible
+in Discord's flat category list.
 
 The default intentionally stays at three channels:
 
@@ -146,22 +152,31 @@ have Discord's `Administrator` permission.
 
 - `/server status` — show connectivity, prerequisites, permissions, and managed
   object counts.
-- `/semester create name:<name>` — create a local managed semester. This does not
-  create a Discord category.
-- `/semester list` — list the server's managed semesters.
-- `/semester delete name:<name> [confirm:true]` — preview, then delete an empty
-  local semester record. It refuses while the semester contains courses.
-- `/course create name:<name> semester:<semester> [code:<code>]` — create and
-  persist the configured Discord course structure.
-- `/course list [semester:<semester>]` — list all managed courses or filter them
-  by semester.
-- `/course info name:<name>` — show stored Discord resource IDs and provisioning
-  state.
-- `/course sync [name:<name>]` — accept the current Discord state for one course,
-  or all managed courses when `name` is omitted, and save a local observation
-  without changing Discord.
-- `/course delete name:<name> [confirm:true]` — preview, then delete the course's
-  stable-ID-tracked resources and local record while preserving manual channels.
+- `/university create name:<name>` — create a local managed university.
+- `/university list` — list universities and their semester counts.
+- `/university delete name:<name> [confirm:true]` — preview, then delete an empty
+  local university. It never deletes Discord resources.
+- `/semester create university:<university> name:<name>` — create a local
+  semester under an existing university.
+- `/semester list [university:<university>]` — list semesters, optionally for one
+  university.
+- `/semester move name:<name> from_university:<source>
+  to_university:<destination> [confirm:true]` — preview, then move a semester in
+  local managed state without renaming Discord categories.
+- `/semester delete name:<name> [university:<university>] [confirm:true]` —
+  preview, then delete an empty local semester record.
+- `/course create name:<name> university:<university> semester:<semester>
+  [code:<code>]` — create and persist the configured Discord course structure.
+- `/course list [university:<university>] [semester:<semester>]` — list or filter
+  managed courses.
+- `/course info name:<name> [university:<university>] [semester:<semester>]` —
+  show stored Discord resource IDs and provisioning state.
+- `/course sync [name:<name>] [university:<university>]
+  [semester:<semester>]` — accept and record current Discord state for the
+  matching courses without changing Discord.
+- `/course delete name:<name> [university:<university>]
+  [semester:<semester>] [confirm:true]` — preview, then delete stable-ID-tracked
+  course resources while preserving manual channels.
 - `/course channel add-all name:<name> channel_type:<Text|Forum|Voice>
   [topic:<topic>] [confirm:true]` — preview, then create and track one shared
   channel in every managed course.
@@ -170,8 +185,12 @@ have Discord's `Administrator` permission.
 - `/course channel list` — list shared definitions and how many course channels
   are currently tracked for each.
 
-Course and semester names are matched case-insensitively. Repeating a completed
-create operation does not create a duplicate. If Discord fails partway through,
+University, semester, and course names are matched case-insensitively.
+University names are unique per server, semester names per university, and
+course names per semester. A short name-only lookup remains valid when it has
+exactly one match; ambiguous commands make no changes and ask for the university
+and semester. Repeating a completed create operation does not create a duplicate.
+If Discord fails partway through,
 successful resource IDs remain stored and retrying the same command continues
 the incomplete course. Unknown categories and channels are reported as
 conflicts and are never deleted or silently adopted.
@@ -193,8 +212,11 @@ run the command. It then:
 - reports missing, wrong-type, or ambiguous resources for administrator review;
 - never creates, renames, moves, or deletes a Discord resource.
 
-With no `name`, `/course sync` covers every course already managed by the bot.
-It deliberately does not claim or inventory unrelated parts of the server.
+With no filters, `/course sync` covers every course already managed by the bot.
+The optional `university` and `semester` values can narrow that set. If a named
+course exists in multiple locations, provide both filters; the bot refuses an
+ambiguous selection without changing Discord. It deliberately does not claim or
+inventory unrelated parts of the server.
 An additional channel can safely coexist inside a managed course category, but
 it does not automatically become one of the template's required channels.
 The logical course name used in slash-command parameters remains unchanged when
@@ -219,8 +241,8 @@ commands. Deletion exists only through the narrow, previewed commands below.
 
 ## Shared channels across all courses
 
-Use this when every current and future managed course needs the same additional
-channel. First request a preview:
+Use this when every current and future managed course across all universities
+needs the same additional channel. First request a preview:
 
 ```text
 /course channel add-all name:announcements channel_type:Text topic:Shared announcements
@@ -265,6 +287,9 @@ Course deletion is always a two-step operation:
 /course delete name:Machine Learning confirm:true
 ```
 
+When the same course name exists more than once, include its location in both
+commands, for example `university:ELTE semester:2026-fall`.
+
 The private preview lists tracked live resources, already missing resources,
 manual/untracked channels that will be kept, and whether the category will be
 deleted. All template and shared channels tracked by stable ID belong to the
@@ -278,12 +303,18 @@ retry.
 A semester can be deleted only after its managed courses are gone:
 
 ```text
-/semester delete name:2026-fall
-/semester delete name:2026-fall confirm:true
+/semester delete name:2026-fall university:ELTE
+/semester delete name:2026-fall university:ELTE confirm:true
 ```
 
 Semester deletion removes only the local empty semester record and never deletes
 Discord resources or cascades into courses.
+
+A university can likewise be deleted only after all of its semesters have been
+deleted or moved. `/university delete` uses the same preview followed by
+`confirm:true` and never deletes Discord resources. `/semester move` also uses a
+preview; it changes only local hierarchy metadata and deliberately does not
+rename existing course categories.
 
 ## Course template configuration
 
@@ -297,6 +328,7 @@ Names and topics may use these placeholders:
 
 - `{course_name}`
 - `{course_code}`
+- `{university}`
 - `{semester}`
 
 The default category setting is:
@@ -304,13 +336,14 @@ The default category setting is:
 ```yaml
 course_template:
   category:
-    name: "{semester} · {course_name}"
+    name: "{university} · {semester} · {course_name}"
 ```
 
 It affects newly created courses. Existing managed categories are not renamed
 automatically because Discord is authoritative; rename them manually if desired,
 then run `/course sync` to accept the current name. The rendered category name
-must fit Discord's 100-character limit.
+must fit Discord's 100-character limit, so a concise university name or
+abbreviation such as `ELTE` is recommended.
 
 Configuration is validated before the bot connects. Duplicate YAML keys,
 unsupported types, invalid placeholders, duplicate tags, and malformed required
@@ -335,10 +368,10 @@ uv run python -m unittest discover -s tests
 ```
 
 The test suite is offline: it validates configuration, command registration,
-administrator authorization, template parsing, SQLite persistence, and the
-course creation, synchronization, bulk-channel, and safe-deletion workflows
-without connecting to Discord. A final test on a separate Discord server is
-still recommended after behavior changes.
+administrator authorization, template parsing, hierarchy uniqueness and
+migration, SQLite persistence, and the course creation, synchronization,
+bulk-channel, and safe-deletion workflows without connecting to Discord. A final
+test on a separate Discord server is still recommended after behavior changes.
 
 ## Safety and local state
 
@@ -354,9 +387,9 @@ still recommended after behavior changes.
 - Destructive commands require a no-change preview followed by `confirm:true`.
   They target only stable IDs owned by the bot and never delete or silently
   adopt an unknown Discord category or channel because of a name match.
-- `data/bot.db` is the bot's local managed-state database. It stores semesters,
-  courses, provisioning states, and stable Discord resource IDs. It is not a
-  backup of Discord messages or server content.
+- `data/bot.db` is the bot's local managed-state database. It stores
+  universities, semesters, courses, provisioning states, and stable Discord
+  resource IDs. It is not a backup of Discord messages or server content.
 - The database and its SQLite sidecar files are ignored by Git. Back up
   `data/bot.db` before future large-scale administration or lifecycle changes.
   Do not casually delete it on a real server: the current version has no
@@ -414,7 +447,8 @@ still recommended after behavior changes.
 
 ### Course creation fails
 
-- Create the semester first with `/semester create`.
+- Create the university first with `/university create`, then create its
+  semester with `/semester create`.
 - Enable Discord Community because the default template contains a Forum
   Channel.
 - Check for an existing unmanaged category or channel with the same expected
@@ -425,6 +459,14 @@ still recommended after behavior changes.
 - If managed channels were manually deleted or rearranged, retain the database
   and run `/course sync name:<course>`. Review its missing or ambiguous warnings;
   deleting the database may remove the only local ownership record.
+
+### Existing semesters appear under `Unassigned`
+
+- This is the safe `0.5.0` migration result: the bot cannot infer the real
+  university of older local records.
+- Create the intended university, preview `/semester move`, then repeat it with
+  `confirm:true`. The move does not rename Discord categories; rename them
+  manually if desired and run `/course sync` afterward.
 
 ### A bulk or deletion operation reports conflicts or partial failure
 
@@ -453,16 +495,17 @@ unless removal is explicitly requested.
 
 ## Roadmap and future candidates
 
-Current status: version `0.4.1` has administrator-only semester management,
-template-driven course creation and inspection, local stable-ID persistence,
-safe conflict handling, server diagnostics, and non-mutating,
-Discord-authoritative course synchronization. It also has previewed course and
-empty-semester deletion plus tracked shared channels for every current and
-future course. The following work remains optional and requires a separate
-explicit request.
+Current status: version `0.5.0` has the administrator-only University →
+Semester → Course hierarchy, scoped duplicate-name handling, safe migration
+of older managed state, template-driven course creation, stable-ID persistence,
+server diagnostics, and non-mutating Discord-authoritative synchronization. It
+also has previewed course, empty-semester, and empty-university deletion plus
+tracked shared channels for every current and future course. The following work
+remains optional and requires a separate explicit request.
 
-The `0.4.1` default visibly prefixes new course categories with their semester
-and uses the focused three-channel course structure documented above.
+The `0.5.0` default visibly prefixes new course categories with their university
+and semester and uses the focused three-channel course structure documented
+above.
 
 ### Priority 1 — extend the safe synchronization foundation
 
@@ -478,13 +521,16 @@ and uses the focused three-channel course structure documented above.
 
 - Completed in `0.4.0`: narrow, previewed deletion of managed courses and empty
   semesters, preserving unknown/manual resources.
+- Completed in `0.5.0`: university ownership for semesters, safe semester
+  movement, and previewed deletion of empty universities.
 - Add course archive and restore without immediate permanent deletion.
-- Add semester information, current-semester selection, archive, and restore.
+- Add university/semester information, per-university current-semester
+  selection, archive, and restore.
 - Define clearly what archive changes on Discord and what remains in SQLite.
 
 ### Priority 3 — usability, recovery, and portability
 
-- Add autocomplete for semester and course parameters.
+- Add autocomplete for university, semester, and course parameters.
 - Extend deliberate reconciliation to missing-database recovery; the current
   sync can reconnect unique replacements only when the course record still
   exists.

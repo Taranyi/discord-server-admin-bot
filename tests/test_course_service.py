@@ -20,7 +20,11 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.database = Database(Path(self.temporary_directory.name) / "bot.db")
         self.database.initialize()
-        self.semester = self.database.create_semester(1, "2026-fall")
+        self.university = self.database.create_university(1, "ELTE")
+        assert self.university is not None
+        self.semester = self.database.create_semester(
+            1, self.university, "2026-fall"
+        )
         assert self.semester is not None
         self.service = CourseService(
             self.database, load_course_template(Path("config.yaml"))
@@ -78,6 +82,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.service.create_course(
             guild,
             name="Machine Learning",
+            university_name="ELTE",
             semester_name="2026-fall",
             code="ML01",
             requested_by=42,
@@ -87,7 +92,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.course.category_id, 100)
         self.assertEqual(
             guild.create_category.await_args.args[0],
-            "2026-fall · Machine Learning",
+            "ELTE · 2026-fall · Machine Learning",
         )
         self.assertEqual(len(self.database.get_course_channels(result.course.id)), 3)
         binding = self.database.get_bulk_channel_binding(
@@ -117,6 +122,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.service.create_course(
                 guild,
                 name="Machine Learning",
+                university_name="ELTE",
                 semester_name="2026-fall",
                 code=None,
                 requested_by=42,
@@ -140,6 +146,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.service.create_course(
                 guild,
                 name="Machine Learning",
+                university_name="ELTE",
                 semester_name="2026-fall",
                 code=None,
                 requested_by=42,
@@ -224,6 +231,33 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         observed = self.database.get_course_sync_channels(course.id)
         self.assertEqual(len(observed), 4)
 
+    def test_sync_refuses_an_ambiguous_course_name(self) -> None:
+        spring = self.database.create_semester(
+            1, self.university, "2027-spring"
+        )
+        assert spring is not None
+        first = self.database.begin_course(
+            1, self.semester, "Machine Learning", None
+        )
+        second = self.database.begin_course(1, spring, "Machine Learning", None)
+        assert first is not None and second is not None
+        guild = cast(
+            discord.Guild,
+            SimpleNamespace(id=1, categories=[], get_channel=lambda _channel_id: None),
+        )
+
+        with self.assertRaisesRegex(CourseServiceError, "multiple locations"):
+            self.service.sync_courses(guild, name="Machine Learning")
+
+        results = self.service.sync_courses(
+            guild,
+            name="Machine Learning",
+            university_name="ELTE",
+            semester_name="2027-spring",
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].course.semester_name, "2027-spring")
+
     async def test_resuming_creation_keeps_a_manually_moved_channel(self) -> None:
         course = self.database.begin_course(
             1, self.semester, "Machine Learning", "ML01"
@@ -274,6 +308,7 @@ class CourseServiceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.service.create_course(
             guild,
             name="Machine Learning",
+            university_name="ELTE",
             semester_name="2026-fall",
             code="ML01",
             requested_by=42,

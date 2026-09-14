@@ -11,7 +11,12 @@ from .config import ConfigError
 
 ChannelType = Literal["text", "forum", "voice"]
 _CHANNEL_TYPES = {"text", "forum", "voice"}
-_ALLOWED_PLACEHOLDERS = {"course_name", "course_code", "semester"}
+_ALLOWED_PLACEHOLDERS = {
+    "course_name",
+    "course_code",
+    "semester",
+    "university",
+}
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

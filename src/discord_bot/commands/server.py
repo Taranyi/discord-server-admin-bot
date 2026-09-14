@@ -28,7 +28,7 @@ async def status(interaction: discord.Interaction) -> None:
     bot_member = guild.me
     permissions = bot_member.guild_permissions if bot_member else discord.Permissions.none()
     bot = cast("AdminBot", interaction.client)
-    semester_count, course_count = bot.database.counts(guild.id)
+    university_count, semester_count, course_count = bot.database.counts(guild.id)
     latency_ms = round(interaction.client.latency * 1000)
     community_enabled = "COMMUNITY" in guild.features
 
@@ -43,6 +43,7 @@ async def status(interaction: discord.Interaction) -> None:
             f"Manage Roles: {'yes' if permissions.manage_roles else 'no'}",
             "Configuration: OK",
             "Database: OK",
+            f"Managed universities: {university_count}",
             f"Managed semesters: {semester_count}",
             f"Managed courses: {course_count}",
         )

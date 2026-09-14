@@ -2,7 +2,7 @@ schema_version: 1
 
 course_template:
   category:
-    name: "{semester} · {course_name}"
+    name: "{university} · {semester} · {course_name}"
 
   channels:
     course_chat:

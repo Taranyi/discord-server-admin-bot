@@ -33,7 +33,8 @@ class AdminBotTests(unittest.IsolatedAsyncioTestCase):
 
         commands = bot.tree.get_commands()
         self.assertEqual(
-            [command.name for command in commands], ["server", "semester", "course"]
+            [command.name for command in commands],
+            ["server", "university", "semester", "course"],
         )
         self.assertEqual(
             [command.name for command in commands[0].commands], ["status"]
@@ -44,9 +45,13 @@ class AdminBotTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [command.name for command in commands[2].commands],
+            ["create", "list", "delete", "move"],
+        )
+        self.assertEqual(
+            [command.name for command in commands[3].commands],
             ["channel", "create", "list", "info", "sync", "delete"],
         )
-        channel_group = commands[2].commands[0]
+        channel_group = commands[3].commands[0]
         self.assertEqual(
             [command.name for command in channel_group.commands],
             ["add-all", "delete-all", "list"],

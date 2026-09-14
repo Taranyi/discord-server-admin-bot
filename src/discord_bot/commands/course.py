@@ -33,12 +33,14 @@ course_channel_group = app_commands.Group(
 @course_group.command(name="create", description="Create a managed course structure.")
 @app_commands.describe(
     name="Human-readable course name",
+    university="Existing managed university",
     semester="Existing managed semester",
     code="Optional course code",
 )
 async def create(
     interaction: discord.Interaction,
     name: app_commands.Range[str, 1, 100],
+    university: app_commands.Range[str, 1, 100],
     semester: app_commands.Range[str, 1, 100],
     code: app_commands.Range[str, 1, 32] | None = None,
 ) -> None:
@@ -52,6 +54,7 @@ async def create(
         result = await bot.course_service.create_course(
             guild,
             name=name,
+            university_name=university,
             semester_name=semester,
             code=code,
             requested_by=interaction.user.id,
@@ -71,6 +74,7 @@ async def create(
         heading,
         "",
         f"**{result.course.name}**",
+        f"University: {result.course.university_name}",
         f"Semester: {result.course.semester_name}",
     ]
     if result.course.code:
@@ -83,16 +87,20 @@ async def create(
 
 
 @course_group.command(name="list", description="List managed courses.")
-@app_commands.describe(semester="Optional semester filter")
+@app_commands.describe(
+    university="Optional university filter",
+    semester="Optional semester filter",
+)
 async def list_courses(
     interaction: discord.Interaction,
+    university: app_commands.Range[str, 1, 100] | None = None,
     semester: app_commands.Range[str, 1, 100] | None = None,
 ) -> None:
     guild = interaction.guild
     if guild is None:
         return
     bot = cast("AdminBot", interaction.client)
-    courses = bot.database.list_courses(guild.id, semester)
+    courses = bot.database.list_courses(guild.id, university, semester)
     if not courses:
         message = "No managed courses found."
     else:
@@ -100,7 +108,10 @@ async def list_courses(
         for course in courses[:50]:
             code = f" [{course.code}]" if course.code else ""
             state = "" if course.status == "active" else " — incomplete"
-            lines.append(f"- {course.name}{code} — {course.semester_name}{state}")
+            lines.append(
+                f"- {course.name}{code} — {course.university_name} → "
+                f"{course.semester_name}{state}"
+            )
         if len(courses) > 50:
             lines.append(f"- … and {len(courses) - 50} more")
         message = "**Managed courses**\n" + "\n".join(lines)
@@ -108,24 +119,40 @@ async def list_courses(
 
 
 @course_group.command(name="info", description="Show a managed course and its resources.")
-@app_commands.describe(name="Managed course name")
+@app_commands.describe(
+    name="Managed course name",
+    university="University filter; optional if the course name is unambiguous",
+    semester="Semester filter; optional if the course name is unambiguous",
+)
 async def info(
-    interaction: discord.Interaction, name: app_commands.Range[str, 1, 100]
+    interaction: discord.Interaction,
+    name: app_commands.Range[str, 1, 100],
+    university: app_commands.Range[str, 1, 100] | None = None,
+    semester: app_commands.Range[str, 1, 100] | None = None,
 ) -> None:
     guild = interaction.guild
     if guild is None:
         return
     bot = cast("AdminBot", interaction.client)
-    course = bot.database.get_course(guild.id, name)
-    if course is None:
+    matches = bot.database.find_courses(guild.id, name, university, semester)
+    if not matches:
         await interaction.response.send_message(
             f'❌ Course "{name}" is not managed.', ephemeral=True
         )
         return
+    if len(matches) > 1:
+        await interaction.response.send_message(
+            f'❌ Course "{name}" exists in multiple locations. Specify '
+            "`university` and `semester`.",
+            ephemeral=True,
+        )
+        return
+    course = matches[0]
 
     channels = bot.database.get_course_channels(course.id)
     lines = [
         f"**{course.name}**",
+        f"University: {course.university_name}",
         f"Semester: {course.semester_name}",
         f"Code: {course.code or '—'}",
         f"Status: {course.status}",
@@ -147,10 +174,16 @@ async def info(
 @course_group.command(
     name="sync", description="Accept and record the current Discord course state."
 )
-@app_commands.describe(name="Optional managed course name; omit to sync every course")
+@app_commands.describe(
+    name="Optional managed course name; omit to sync matching courses",
+    university="Optional university filter",
+    semester="Optional semester filter",
+)
 async def sync(
     interaction: discord.Interaction,
     name: app_commands.Range[str, 1, 100] | None = None,
+    university: app_commands.Range[str, 1, 100] | None = None,
+    semester: app_commands.Range[str, 1, 100] | None = None,
 ) -> None:
     guild = interaction.guild
     if guild is None:
@@ -159,7 +192,12 @@ async def sync(
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     try:
-        results = bot.course_service.sync_courses(guild, name=name)
+        results = bot.course_service.sync_courses(
+            guild,
+            name=name,
+            university_name=university,
+            semester_name=semester,
+        )
     except CourseServiceError as error:
         await interaction.edit_original_response(content=f"❌ {error}")
         return
@@ -180,7 +218,9 @@ async def sync(
             )
             changes = len(result.accepted_changes) + len(result.rebound)
             lines.append(
-                f"- **{result.course.name}**: {result.present_count} channel(s), "
+                f"- **{result.course.university_name} → "
+                f"{result.course.semester_name} → {result.course.name}**: "
+                f"{result.present_count} channel(s), "
                 f"{changes} accepted change(s), {warning_count} warning(s)"
             )
         if len(results) > 40:
@@ -194,11 +234,15 @@ async def sync(
 @course_group.command(name="delete", description="Safely delete a managed course.")
 @app_commands.describe(
     name="Managed course name",
+    university="University filter; optional if the course name is unambiguous",
+    semester="Semester filter; optional if the course name is unambiguous",
     confirm="Set true after reviewing the deletion preview",
 )
 async def delete(
     interaction: discord.Interaction,
     name: app_commands.Range[str, 1, 100],
+    university: app_commands.Range[str, 1, 100] | None = None,
+    semester: app_commands.Range[str, 1, 100] | None = None,
     confirm: bool = False,
 ) -> None:
     guild = interaction.guild
@@ -212,6 +256,8 @@ async def delete(
             name=name,
             confirm=confirm,
             requested_by=interaction.user.id,
+            university_name=university,
+            semester_name=semester,
         )
     except CourseServiceError as error:
         await interaction.edit_original_response(content=f"❌ {error}")
@@ -221,6 +267,8 @@ async def delete(
         lines = [
             "**Course deletion preview**",
             f"Course: **{result.course.name}**",
+            f"University: {result.course.university_name}",
+            f"Semester: {result.course.semester_name}",
             f"Managed channels to delete: {len(result.managed_live)}",
             f"Already missing managed channels: {len(result.managed_missing)}",
             "Category: "
@@ -242,6 +290,8 @@ async def delete(
         lines = [
             f"{icon} Course deletion {'completed' if result.record_removed else 'incomplete'}",
             f"Course: **{result.course.name}**",
+            f"University: {result.course.university_name}",
+            f"Semester: {result.course.semester_name}",
         ]
         _append_sync_section(lines, "Deleted", result.deleted)
         _append_sync_section(lines, "Manual channels kept", result.manual_kept)
@@ -418,6 +468,8 @@ def _format_sync_details(result: CourseSyncResult) -> str:
         "No Discord resources were modified.",
         "",
         f"**{result.course.name}**",
+        f"University: {result.course.university_name}",
+        f"Semester: {result.course.semester_name}",
         f"Category: {result.category_name or 'missing'}",
         f"Observed channels: {result.present_count}",
     ]

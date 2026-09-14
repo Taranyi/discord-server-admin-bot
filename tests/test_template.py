@@ -12,7 +12,10 @@ class CourseTemplateTests(unittest.TestCase):
     def test_loads_default_template(self) -> None:
         template = load_course_template(Path("config.yaml"))
 
-        self.assertEqual(template.category_name, "{semester} · {course_name}")
+        self.assertEqual(
+            template.category_name,
+            "{university} · {semester} · {course_name}",
+        )
         self.assertEqual(
             [channel.key for channel in template.channels],
             ["course_chat", "discussions", "study_room"],

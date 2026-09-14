@@ -6,9 +6,18 @@ from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
+class University:
+    id: int
+    guild_id: int
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class Semester:
     id: int
     guild_id: int
+    university_id: int
+    university_name: str
     name: str
 
 
@@ -16,6 +25,8 @@ class Semester:
 class Course:
     id: int
     guild_id: int
+    university_id: int
+    university_name: str
     semester_id: int
     semester_name: str
     name: str
@@ -64,8 +75,26 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         database = self._connect()
         try:
-            database.executescript(
-                """
+            self._ensure_v3_schema(database)
+            version = int(
+                database.execute("SELECT version FROM schema_metadata").fetchone()[0]
+            )
+            if version > 4:
+                raise RuntimeError(
+                    f"Database schema version {version} is newer than supported version 4"
+                )
+            if version < 4:
+                self._migrate_to_v4(database)
+            violations = database.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError("Database migration left invalid foreign keys")
+        finally:
+            database.close()
+
+    @staticmethod
+    def _ensure_v3_schema(database: sqlite3.Connection) -> None:
+        database.executescript(
+            """
                 CREATE TABLE IF NOT EXISTS schema_metadata (
                     version INTEGER NOT NULL
                 );
@@ -151,19 +180,90 @@ class Database:
                 );
 
                 UPDATE schema_metadata SET version = 3 WHERE version < 3;
-                """
-            )
-            database.commit()
-        finally:
-            database.close()
+            """
+        )
+        database.commit()
 
-    def create_semester(self, guild_id: int, name: str) -> Semester | None:
+    @staticmethod
+    def _migrate_to_v4(database: sqlite3.Connection) -> None:
+        database.execute("PRAGMA foreign_keys = OFF")
+        database.executescript(
+            """
+            BEGIN IMMEDIATE;
+
+            CREATE TABLE universities (
+                id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (guild_id, normalized_name)
+            );
+
+            INSERT INTO universities (guild_id, name, normalized_name)
+            SELECT DISTINCT guild_id, 'Unassigned', 'unassigned'
+            FROM semesters;
+
+            CREATE TABLE semesters_v4 (
+                id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                university_id INTEGER NOT NULL REFERENCES universities(id),
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (university_id, normalized_name)
+            );
+
+            INSERT INTO semesters_v4 (
+                id, guild_id, university_id, name, normalized_name, created_at
+            )
+            SELECT s.id, s.guild_id, u.id, s.name, s.normalized_name, s.created_at
+            FROM semesters AS s
+            JOIN universities AS u
+              ON u.guild_id = s.guild_id
+             AND u.normalized_name = 'unassigned';
+
+            CREATE TABLE courses_v4 (
+                id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                semester_id INTEGER NOT NULL REFERENCES semesters_v4(id),
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                code TEXT,
+                discord_category_id INTEGER UNIQUE,
+                status TEXT NOT NULL DEFAULT 'creating'
+                    CHECK (status IN ('creating', 'active')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (semester_id, normalized_name)
+            );
+
+            INSERT INTO courses_v4 (
+                id, guild_id, semester_id, name, normalized_name, code,
+                discord_category_id, status, created_at, updated_at
+            )
+            SELECT id, guild_id, semester_id, name, normalized_name, code,
+                   discord_category_id, status, created_at, updated_at
+            FROM courses;
+
+            DROP TABLE courses;
+            DROP TABLE semesters;
+            ALTER TABLE semesters_v4 RENAME TO semesters;
+            ALTER TABLE courses_v4 RENAME TO courses;
+
+            UPDATE schema_metadata SET version = 4;
+            COMMIT;
+            """
+        )
+        database.execute("PRAGMA foreign_keys = ON")
+
+    def create_university(self, guild_id: int, name: str) -> University | None:
         database = self._connect()
         try:
             try:
                 cursor = database.execute(
                     """
-                    INSERT INTO semesters (guild_id, name, normalized_name)
+                    INSERT INTO universities (guild_id, name, normalized_name)
                     VALUES (?, ?, ?)
                     """,
                     (guild_id, name, normalize_name(name)),
@@ -172,34 +272,121 @@ class Database:
                 return None
             database.commit()
             if cursor.lastrowid is None:
-                raise RuntimeError("SQLite did not return the new semester ID")
-            return Semester(id=cursor.lastrowid, guild_id=guild_id, name=name)
+                raise RuntimeError("SQLite did not return the new university ID")
+            return University(id=cursor.lastrowid, guild_id=guild_id, name=name)
         finally:
             database.close()
 
-    def get_semester(self, guild_id: int, name: str) -> Semester | None:
+    def get_university(self, guild_id: int, name: str) -> University | None:
         database = self._connect()
         try:
             row = database.execute(
                 """
-                SELECT id, guild_id, name FROM semesters
+                SELECT id, guild_id, name FROM universities
                 WHERE guild_id = ? AND normalized_name = ?
                 """,
                 (guild_id, normalize_name(name)),
             ).fetchone()
-            return Semester(**dict(row)) if row is not None else None
+            return University(**dict(row)) if row is not None else None
         finally:
             database.close()
 
-    def list_semesters(self, guild_id: int) -> list[Semester]:
+    def list_universities(self, guild_id: int) -> list[University]:
         database = self._connect()
         try:
             rows = database.execute(
                 """
-                SELECT id, guild_id, name FROM semesters
+                SELECT id, guild_id, name FROM universities
                 WHERE guild_id = ? ORDER BY name COLLATE NOCASE
                 """,
                 (guild_id,),
+            ).fetchall()
+            return [University(**dict(row)) for row in rows]
+        finally:
+            database.close()
+
+    def create_semester(
+        self, guild_id: int, university: University, name: str
+    ) -> Semester | None:
+        if university.guild_id != guild_id:
+            return None
+        database = self._connect()
+        try:
+            try:
+                cursor = database.execute(
+                    """
+                    INSERT INTO semesters (
+                        guild_id, university_id, name, normalized_name
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (guild_id, university.id, name, normalize_name(name)),
+                )
+            except sqlite3.IntegrityError:
+                return None
+            database.commit()
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return the new semester ID")
+            return Semester(
+                id=cursor.lastrowid,
+                guild_id=guild_id,
+                university_id=university.id,
+                university_name=university.name,
+                name=name,
+            )
+        finally:
+            database.close()
+
+    def find_semesters(
+        self, guild_id: int, name: str, university_name: str | None = None
+    ) -> list[Semester]:
+        database = self._connect()
+        try:
+            parameters: list[object] = [guild_id, normalize_name(name)]
+            university_filter = ""
+            if university_name is not None:
+                university_filter = " AND u.normalized_name = ?"
+                parameters.append(normalize_name(university_name))
+            rows = database.execute(
+                f"""
+                SELECT s.id, s.guild_id, s.university_id,
+                       u.name AS university_name, s.name
+                FROM semesters AS s
+                JOIN universities AS u ON u.id = s.university_id
+                WHERE s.guild_id = ? AND s.normalized_name = ?{university_filter}
+                ORDER BY u.name COLLATE NOCASE
+                """,
+                parameters,
+            ).fetchall()
+            return [Semester(**dict(row)) for row in rows]
+        finally:
+            database.close()
+
+    def get_semester(
+        self, guild_id: int, name: str, university_name: str | None = None
+    ) -> Semester | None:
+        matches = self.find_semesters(guild_id, name, university_name)
+        return matches[0] if len(matches) == 1 else None
+
+    def list_semesters(
+        self, guild_id: int, university_name: str | None = None
+    ) -> list[Semester]:
+        database = self._connect()
+        try:
+            parameters: list[object] = [guild_id]
+            university_filter = ""
+            if university_name is not None:
+                university_filter = " AND u.normalized_name = ?"
+                parameters.append(normalize_name(university_name))
+            rows = database.execute(
+                f"""
+                SELECT s.id, s.guild_id, s.university_id,
+                       u.name AS university_name, s.name
+                FROM semesters AS s
+                JOIN universities AS u ON u.id = s.university_id
+                WHERE s.guild_id = ?{university_filter}
+                ORDER BY u.name COLLATE NOCASE, s.name COLLATE NOCASE
+                """,
+                parameters,
             ).fetchall()
             return [Semester(**dict(row)) for row in rows]
         finally:
@@ -208,6 +395,8 @@ class Database:
     def begin_course(
         self, guild_id: int, semester: Semester, name: str, code: str | None
     ) -> Course | None:
+        if semester.guild_id != guild_id:
+            return None
         database = self._connect()
         try:
             try:
@@ -227,6 +416,8 @@ class Database:
             return Course(
                 id=cursor.lastrowid,
                 guild_id=guild_id,
+                university_id=semester.university_id,
+                university_name=semester.university_name,
                 semester_id=semester.id,
                 semester_name=semester.name,
                 name=name,
@@ -237,41 +428,81 @@ class Database:
         finally:
             database.close()
 
-    def get_course(self, guild_id: int, name: str) -> Course | None:
+    def find_courses(
+        self,
+        guild_id: int,
+        name: str,
+        university_name: str | None = None,
+        semester_name: str | None = None,
+    ) -> list[Course]:
         database = self._connect()
         try:
-            row = database.execute(
-                """
-                SELECT c.id, c.guild_id, c.semester_id, s.name AS semester_name,
-                       c.name, c.code, c.discord_category_id AS category_id, c.status
+            parameters: list[object] = [guild_id, normalize_name(name)]
+            filters = ""
+            if university_name is not None:
+                filters += " AND u.normalized_name = ?"
+                parameters.append(normalize_name(university_name))
+            if semester_name is not None:
+                filters += " AND s.normalized_name = ?"
+                parameters.append(normalize_name(semester_name))
+            rows = database.execute(
+                f"""
+                SELECT c.id, c.guild_id, u.id AS university_id,
+                       u.name AS university_name, c.semester_id,
+                       s.name AS semester_name, c.name, c.code,
+                       c.discord_category_id AS category_id, c.status
                 FROM courses AS c
                 JOIN semesters AS s ON s.id = c.semester_id
-                WHERE c.guild_id = ? AND c.normalized_name = ?
+                JOIN universities AS u ON u.id = s.university_id
+                WHERE c.guild_id = ? AND c.normalized_name = ?{filters}
+                ORDER BY u.name COLLATE NOCASE, s.name COLLATE NOCASE
                 """,
-                (guild_id, normalize_name(name)),
-            ).fetchone()
-            return Course(**dict(row)) if row is not None else None
+                parameters,
+            ).fetchall()
+            return [Course(**dict(row)) for row in rows]
         finally:
             database.close()
 
+    def get_course(
+        self,
+        guild_id: int,
+        name: str,
+        university_name: str | None = None,
+        semester_name: str | None = None,
+    ) -> Course | None:
+        matches = self.find_courses(
+            guild_id, name, university_name, semester_name
+        )
+        return matches[0] if len(matches) == 1 else None
+
     def list_courses(
-        self, guild_id: int, semester_name: str | None = None
+        self,
+        guild_id: int,
+        university_name: str | None = None,
+        semester_name: str | None = None,
     ) -> list[Course]:
         database = self._connect()
         try:
             parameters: list[object] = [guild_id]
             filter_sql = ""
+            if university_name is not None:
+                filter_sql += " AND u.normalized_name = ?"
+                parameters.append(normalize_name(university_name))
             if semester_name is not None:
-                filter_sql = " AND s.normalized_name = ?"
+                filter_sql += " AND s.normalized_name = ?"
                 parameters.append(normalize_name(semester_name))
             rows = database.execute(
                 f"""
-                SELECT c.id, c.guild_id, c.semester_id, s.name AS semester_name,
-                       c.name, c.code, c.discord_category_id AS category_id, c.status
+                SELECT c.id, c.guild_id, u.id AS university_id,
+                       u.name AS university_name, c.semester_id,
+                       s.name AS semester_name, c.name, c.code,
+                       c.discord_category_id AS category_id, c.status
                 FROM courses AS c
                 JOIN semesters AS s ON s.id = c.semester_id
+                JOIN universities AS u ON u.id = s.university_id
                 WHERE c.guild_id = ?{filter_sql}
-                ORDER BY s.name COLLATE NOCASE, c.name COLLATE NOCASE
+                ORDER BY u.name COLLATE NOCASE, s.name COLLATE NOCASE,
+                         c.name COLLATE NOCASE
                 """,
                 parameters,
             ).fetchall()
@@ -570,6 +801,35 @@ class Database:
         finally:
             database.close()
 
+    def count_semesters_in_university(self, university_id: int) -> int:
+        database = self._connect()
+        try:
+            row = database.execute(
+                "SELECT COUNT(*) FROM semesters WHERE university_id = ?",
+                (university_id,),
+            ).fetchone()
+            return int(row[0])
+        finally:
+            database.close()
+
+    def move_semester(self, semester_id: int, university: University) -> bool:
+        database = self._connect()
+        try:
+            try:
+                cursor = database.execute(
+                    """
+                    UPDATE semesters SET university_id = ?
+                    WHERE id = ? AND guild_id = ?
+                    """,
+                    (university.id, semester_id, university.guild_id),
+                )
+            except sqlite3.IntegrityError:
+                return False
+            database.commit()
+            return cursor.rowcount == 1
+        finally:
+            database.close()
+
     def delete_course(self, course_id: int) -> bool:
         database = self._connect()
         try:
@@ -596,16 +856,36 @@ class Database:
         finally:
             database.close()
 
-    def counts(self, guild_id: int) -> tuple[int, int]:
+    def delete_university(self, university_id: int) -> bool:
         database = self._connect()
         try:
+            cursor = database.execute(
+                """
+                DELETE FROM universities
+                WHERE id = ? AND NOT EXISTS (
+                    SELECT 1 FROM semesters WHERE university_id = ?
+                )
+                """,
+                (university_id, university_id),
+            )
+            database.commit()
+            return cursor.rowcount == 1
+        finally:
+            database.close()
+
+    def counts(self, guild_id: int) -> tuple[int, int, int]:
+        database = self._connect()
+        try:
+            university_count = database.execute(
+                "SELECT COUNT(*) FROM universities WHERE guild_id = ?", (guild_id,)
+            ).fetchone()[0]
             semester_count = database.execute(
                 "SELECT COUNT(*) FROM semesters WHERE guild_id = ?", (guild_id,)
             ).fetchone()[0]
             course_count = database.execute(
                 "SELECT COUNT(*) FROM courses WHERE guild_id = ?", (guild_id,)
             ).fetchone()[0]
-            return int(semester_count), int(course_count)
+            return int(university_count), int(semester_count), int(course_count)
         finally:
             database.close()
 

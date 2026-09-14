@@ -19,10 +19,11 @@ A jelenlegi MVP részei:
 - minden parancsra érvényes, központi adminisztrátori jogosultság-ellenőrzés;
 - YAML-alapú kurzussablon;
 - helyi SQLite kezelt állapot;
-- szemeszterek létrehozása és listázása;
+- egyetemek és szemeszterek létrehozása, listázása, mozgatása és biztonságos
+  üres törlése;
 - kurzusok létrehozása, listázása, lekérdezése és a Discord állapotát elsődlegesnek
   tekintő szinkronizálása;
-- kezelt kurzusok és üres szemeszterek előnézetes törlése;
+- kezelt kurzusok, üres szemeszterek és üres egyetemek előnézetes törlése;
 - nyilvántartott közös csatornák létrehozása és törlése minden kezelt kurzusban;
 - privát diagnosztikai `/server status` parancs.
 
@@ -94,11 +95,13 @@ kiszivárog, azonnal cseréld le.
 
 Az adminisztrációs munkamenet végén állítsd le a botot `Ctrl+C`-vel. A helyi
 SQLite adatbázis a `data/` könyvtárba kerül, és szándékosan nincs Gitben követve.
-Az első `0.4.0` vagy újabb indításkor a meglévő adatbázis helyben megkapja az
-új, közös csatornákat nyilvántartó táblákat; a meglévő szemeszterek,
-kurzusok, erőforrás-azonosítók és szinkronpillanatképek megmaradnak. Ettől
-függetlenül az első éles indítás előtt ajánlott másolatot készíteni a
-`data/bot.db` fájlról.
+Az első `0.5.0` indításkor a meglévő adatbázis helyben megkapja az egyetemi
+hierarchiát; a meglévő szemeszterek, kurzusok, Discord-azonosítók,
+közöscsatorna-állapotok és szinkronpillanatképek megmaradnak. A meglévő
+szemeszterek egy helyi `Unassigned` egyetem alá kerülnek, mert valódi egyetemük
+nem következtethető ki biztonságosan. Az első éles indítás előtt készíts
+másolatot a `data/bot.db` fájlról, majd a `/semester move` paranccsal helyezd át
+a migrált szemesztereket egy általad létrehozott egyetem alá.
 
 ## Első használat
 
@@ -106,29 +109,32 @@ függetlenül az első éles indítás előtt ajánlott másolatot készíteni a
    botot, hogy a parancsok regisztrálódjanak Discordon.
 2. Futtasd a `/server status` parancsot, és ellenőrizd, hogy a Community és a
    Manage Channels értéke egyaránt `yes`.
-3. Hozz létre egy szemesztert, például: `/semester create name:2026-fall`.
-4. Hozz létre egy kurzust, például: `/course create name:Machine Learning
+3. Hozz létre egy egyetemet, például: `/university create name:ELTE`.
+4. Hozz létre alatta egy szemesztert: `/semester create university:ELTE
+   name:2026-fall`.
+5. Hozz létre egy kurzust: `/course create name:Machine Learning university:ELTE
    semester:2026-fall code:ML01`.
-5. Ellenőrizd a `/course info name:Machine Learning` paranccsal.
-6. Kézi Discord-módosítás után futtasd a `/course sync name:Machine Learning`
+6. Ellenőrizd a `/course info name:Machine Learning` paranccsal.
+7. Kézi Discord-módosítás után futtasd a `/course sync name:Machine Learning`
    parancsot, vagy a `name` elhagyásával szinkronizáld az összes kezelt kurzust.
-7. A törlési és tömeges műveleteket először megerősítés nélkül nézd meg. Csak a
+8. A törlési és tömeges műveleteket először megerősítés nélkül nézd meg. Csak a
    privát előnézet átnézése után ismételd meg `confirm:true` értékkel.
 
-A kurzus létrehozásakor egy szemeszterrel megjelölt kategória és a következő
-struktúra készül:
+A kurzus létrehozásakor egy egyetemmel és szemeszterrel megjelölt kategória
+készül:
 
 ```text
-2026-fall · Machine Learning
+ELTE · 2026-fall · Machine Learning
 ├── #course-chat
 ├── discussions (fórum)
 └── study-room (hang)
 ```
 
 A fórumcímkék, csatornanevek, témák és a kategória formátuma a `config.yaml`
-fájlból származik. Az alapértelmezett `{semester} · {course_name}` formátummal a
-Discord csatornalistájában több szemeszter kurzusai is egyértelműen
-megkülönböztethetők.
+fájlból származik. A Discord-kategóriák nem ágyazhatók egymásba, ezért az
+adatbázis tárolja a valódi Egyetem → Szemeszter → Kurzus hierarchiát, a
+`{university} · {semester} · {course_name}` kategóriaformátum pedig láthatóvá
+teszi azt a Discord lapos kategórialistájában.
 
 Az alapértelmezett szerkezet szándékosan csak három csatornából áll:
 
@@ -156,23 +162,32 @@ szükséges a parancsot futtató felhasználónál.
 
 - `/server status` — kapcsolat, előfeltételek, jogosultságok és kezelt objektumok
   darabszáma.
-- `/semester create name:<név>` — helyi kezelt szemeszter létrehozása. Discord
-  kategóriát nem hoz létre.
-- `/semester list` — a szerver kezelt szemesztereinek listázása.
-- `/semester delete name:<név> [confirm:true]` — üres helyi szemeszterrekord
-  előnézete, majd törlése. Ha kurzus van benne, a bot megtagadja a műveletet.
-- `/course create name:<név> semester:<szemeszter> [code:<kód>]` — a konfigurált
-  Discord-kurzusstruktúra létrehozása és azonosítóinak mentése.
-- `/course list [semester:<szemeszter>]` — minden kezelt kurzus listázása vagy
-  szűrés szemeszter szerint.
-- `/course info name:<név>` — az eltárolt Discord-erőforrásazonosítók és a
-  létrehozási állapot megjelenítése.
-- `/course sync [name:<név>]` — a Discord aktuális állapotának elfogadása és helyi
-  pillanatképének mentése egy kurzusnál, illetve a `name` elhagyásakor minden
-  kezelt kurzusnál, a Discord módosítása nélkül.
-- `/course delete name:<név> [confirm:true]` — előnézet, majd a kurzus stabil
-  ID-val nyilvántartott erőforrásainak és helyi rekordjának törlése, a kézi
-  csatornák megtartásával.
+- `/university create name:<név>` — helyi kezelt egyetem létrehozása.
+- `/university list` — egyetemek listázása a szemesztereik darabszámával.
+- `/university delete name:<név> [confirm:true]` — üres helyi egyetem
+  előnézete, majd törlése; Discord-erőforrást nem töröl.
+- `/semester create university:<egyetem> name:<név>` — helyi szemeszter
+  létrehozása egy meglévő egyetem alatt.
+- `/semester list [university:<egyetem>]` — szemeszterek listázása, opcionálisan
+  egy egyetemre szűrve.
+- `/semester move name:<név> from_university:<forrás>
+  to_university:<cél> [confirm:true]` — szemeszter helyi áthelyezésének
+  előnézete, majd végrehajtása a Discord-kategóriák átnevezése nélkül.
+- `/semester delete name:<név> [university:<egyetem>] [confirm:true]` — üres
+  helyi szemeszterrekord előnézete, majd törlése.
+- `/course create name:<név> university:<egyetem> semester:<szemeszter>
+  [code:<kód>]` — a konfigurált Discord-kurzusstruktúra létrehozása és
+  azonosítóinak mentése.
+- `/course list [university:<egyetem>] [semester:<szemeszter>]` — kezelt
+  kurzusok listázása vagy szűrése.
+- `/course info name:<név> [university:<egyetem>] [semester:<szemeszter>]` — az
+  eltárolt Discord-erőforrásazonosítók és a létrehozási állapot megjelenítése.
+- `/course sync [name:<név>] [university:<egyetem>]
+  [semester:<szemeszter>]` — az aktuális Discord-állapot elfogadása és mentése
+  a megfelelő kurzusokhoz a Discord módosítása nélkül.
+- `/course delete name:<név> [university:<egyetem>]
+  [semester:<szemeszter>] [confirm:true]` — előnézet, majd a kurzus stabil
+  ID-val nyilvántartott erőforrásainak törlése a kézi csatornák megtartásával.
 - `/course channel add-all name:<név> channel_type:<Text|Forum|Voice>
   [topic:<téma>] [confirm:true]` — közös csatorna előnézete, majd létrehozása és
   nyilvántartása minden kezelt kurzusban.
@@ -181,9 +196,13 @@ szükséges a parancsot futtató felhasználónál.
 - `/course channel list` — a közös definíciók és a hozzájuk jelenleg nyilvántartott
   kurzuscsatornák darabszámának listázása.
 
-A kurzus- és szemeszternevek összehasonlítása nem érzékeny a kis- és nagybetűkre.
-Egy befejezett létrehozási művelet ismétlése nem készít másolatot. Ha a Discord
-részben hibázik, a sikeresen létrehozott erőforrások azonosítói megmaradnak, és
+Az egyetem-, szemeszter- és kurzusnevek összehasonlítása nem érzékeny a kis- és
+nagybetűkre. Az egyetemnév szerverenként, a szemeszternév egyetemenként, a
+kurzusnév pedig szemeszterenként egyedi. A csak nevet tartalmazó rövid
+lekérdezés megmarad, ha pontosan egy találat van; kétértelmű parancsnál a bot
+nem módosít semmit, hanem bekéri az egyetemet és a szemesztert. Egy befejezett
+létrehozási művelet ismétlése nem készít másolatot. Ha a Discord részben
+hibázik, a sikeresen létrehozott erőforrások azonosítói megmaradnak, és
 ugyanaz a parancs folytatja a hiányos kurzust. Az ismeretlen kategóriákat és
 csatornákat a bot ütközésként jelzi; nem törli és nem veszi át őket automatikusan.
 
@@ -205,8 +224,11 @@ parancsot. A művelet:
   adminisztrátor átnézhesse őket;
 - soha nem hoz létre, nevez át, helyez át vagy töröl Discord-erőforrást.
 
-A `name` nélküli `/course sync` minden, a bot által már kezelt kurzust átvizsgál.
-A szerver ettől független részeit szándékosan nem sajátítja ki és nem leltározza.
+A szűrők nélküli `/course sync` minden, a bot által már kezelt kurzust
+átvizsgál. Az opcionális `university` és `semester` értékekkel szűkíthető a
+kör. Ha egy megadott kurzusnév több helyen létezik, mindkét szűrőt add meg; a
+bot a kétértelmű kiválasztást a Discord módosítása nélkül elutasítja. A szerver
+ettől független részeit szándékosan nem sajátítja ki és nem leltározza.
 Egy további csatorna biztonságosan megmaradhat egy kezelt kurzuskategóriában, de
 ettől nem válik automatikusan a sablon egyik kötelező csatornájává.
 A slash parancsok paramétereként használt logikai kurzusnév akkor sem változik
@@ -232,8 +254,8 @@ parancsokkal lehetséges.
 
 ## Közös csatornák minden kurzusban
 
-Ezt használd, ha minden jelenlegi és jövőbeli kezelt kurzushoz ugyanaz a további
-csatorna kell. Először kérj előnézetet:
+Ezt használd, ha minden egyetem minden jelenlegi és jövőbeli kezelt kurzusához
+ugyanaz a további csatorna kell. Először kérj előnézetet:
 
 ```text
 /course channel add-all name:announcements channel_type:Text topic:Shared announcements
@@ -281,6 +303,9 @@ A kurzustörlés mindig kétlépcsős:
 /course delete name:Machine Learning confirm:true
 ```
 
+Ha ugyanaz a kurzusnév többször létezik, mindkét parancsban add meg a helyét is,
+például: `university:ELTE semester:2026-fall`.
+
 A privát előnézet felsorolja az élő nyilvántartott erőforrásokat, a már hiányzó
 elemeket, a megtartandó kézi/nem nyilvántartott csatornákat, és azt, hogy a
 kategória törlődik-e. Minden stabil ID-val nyilvántartott sablon- és közös
@@ -294,12 +319,18 @@ biztonságos újrapróbáláshoz.
 Szemeszter csak azután törölhető, hogy minden kezelt kurzusa eltűnt:
 
 ```text
-/semester delete name:2026-fall
-/semester delete name:2026-fall confirm:true
+/semester delete name:2026-fall university:ELTE
+/semester delete name:2026-fall university:ELTE confirm:true
 ```
 
 A szemesztertörlés csak az üres helyi szemeszterrekordot távolítja el; nem töröl
 Discord-erőforrást, és nem törli automatikusan a kurzusokat.
+
+Egyetem is csak az összes szemeszterének törlése vagy áthelyezése után
+törölhető. A `/university delete` ugyanúgy előnézetet, majd `confirm:true`
+megerősítést használ, és nem töröl Discord-erőforrást. A `/semester move` is
+előnézetes: csak a helyi hierarchiakapcsolatot módosítja, a meglévő
+kurzuskategóriákat szándékosan nem nevezi át.
 
 ## A kurzussablon konfigurálása
 
@@ -314,6 +345,7 @@ A nevekben és témákban ezek a helyőrzők használhatók:
 
 - `{course_name}`
 - `{course_code}`
+- `{university}`
 - `{semester}`
 
 Az alapértelmezett kategóriabeállítás:
@@ -321,14 +353,15 @@ Az alapértelmezett kategóriabeállítás:
 ```yaml
 course_template:
   category:
-    name: "{semester} · {course_name}"
+    name: "{university} · {semester} · {course_name}"
 ```
 
 Ez az újonnan létrehozott kurzusokra érvényes. A meglévő kezelt kategóriákat a
 bot nem nevezi át automatikusan, mert a Discord állapota az elsődleges. Ha
 szeretnéd, nevezd át őket kézzel, majd a `/course sync` paranccsal fogadtasd el
 az aktuális nevet. Az elkészült kategórianévnek bele kell férnie a Discord 100
-karakteres korlátjába.
+karakteres korlátjába, ezért rövid egyetemnév vagy rövidítés, például `ELTE`
+ajánlott.
 
 A konfiguráció ellenőrzése még a Discord-csatlakozás előtt megtörténik. Az
 ismétlődő YAML-kulcsok, nem támogatott típusok, hibás helyőrzők, duplikált
@@ -355,10 +388,10 @@ uv run python -m unittest discover -s tests
 
 A tesztcsomag offline fut: Discord-kapcsolat nélkül ellenőrzi a konfigurációt, a
 parancsregisztrációt, az adminisztrátori jogosultság-ellenőrzést, a sablon
-feldolgozását, az SQLite-adatmentést, valamint a kurzuslétrehozási,
-szinkronizálási, közöscsatorna- és biztonságos törlési folyamatokat. A felhasználói
-működés módosítása után továbbra is ajánlott egy utolsó próba külön
-Discord-tesztszerveren.
+feldolgozását, a hierarchia egyediségét és migrációját, az SQLite-adatmentést,
+valamint a kurzuslétrehozási, szinkronizálási, közöscsatorna- és biztonságos
+törlési folyamatokat. A felhasználói működés módosítása után továbbra is
+ajánlott egy utolsó próba külön Discord-tesztszerveren.
 
 ## Biztonság és helyi állapot
 
@@ -376,9 +409,10 @@ Discord-tesztszerveren.
   megerősítést kérnek. Csak a bot stabil ID-val birtokolt elemeit célozzák, és
   névegyezés miatt soha nem törölnek vagy vesznek át csendben ismeretlen
   Discord-kategóriát vagy -csatornát.
-- A `data/bot.db` a bot helyi, kezelt állapotadatbázisa. Szemesztereket,
-  kurzusokat, létrehozási állapotokat és stabil Discord-erőforrásazonosítókat
-  tárol. Nem a Discord-üzenetek vagy a szerver tartalmának biztonsági mentése.
+- A `data/bot.db` a bot helyi, kezelt állapotadatbázisa. Egyetemeket,
+  szemesztereket, kurzusokat, létrehozási állapotokat és stabil
+  Discord-erőforrásazonosítókat tárol. Nem a Discord-üzenetek vagy a szerver
+  tartalmának biztonsági mentése.
 - Az adatbázist és az SQLite kísérőfájljait a Git figyelmen kívül hagyja. Későbbi
   nagyobb adminisztrációs vagy életciklus-műveletek előtt készíts másolatot a
   `data/bot.db` fájlról. Valódi szerveren ne töröld könnyelműen: a jelenlegi
@@ -441,7 +475,8 @@ Discord-tesztszerveren.
 
 ### A kurzus létrehozása sikertelen
 
-- Először hozd létre a szemesztert a `/semester create` paranccsal.
+- Először hozd létre az egyetemet a `/university create`, majd annak
+  szemeszterét a `/semester create` paranccsal.
 - Engedélyezd a Discord Community funkcióját, mert az alapértelmezett sablon
   fórumcsatornát tartalmaz.
 - Ellenőrizd, van-e már az elvárt névvel nem kezelt kategória vagy csatorna. A
@@ -453,6 +488,15 @@ Discord-tesztszerveren.
   adatbázist, és futtasd a `/course sync name:<kurzus>` parancsot. Nézd át a
   hiányzó vagy nem egyértelmű találatokról szóló figyelmeztetést; az adatbázis
   törlése eltávolíthatja az egyetlen helyi tulajdonosi nyilvántartást.
+
+### A meglévő szemeszterek az `Unassigned` egyetem alatt jelennek meg
+
+- Ez a biztonságos `0.5.0` migráció eredménye: a bot nem tudja kikövetkeztetni a
+  régebbi helyi rekordok valódi egyetemét.
+- Hozd létre a megfelelő egyetemet, nézd meg a `/semester move` előnézetét, majd
+  ismételd meg `confirm:true` értékkel. A mozgatás nem nevezi át a
+  Discord-kategóriákat; ha szeretnéd, nevezd át őket kézzel, majd futtasd a
+  `/course sync` parancsot.
 
 ### Egy tömeges vagy törlési művelet ütközést vagy részleges hibát jelez
 
@@ -483,16 +527,16 @@ felhasználó nem kéri kifejezetten a törlésüket.
 
 ## Ütemterv és jövőbeli lehetőségek
 
-Jelenlegi állapot: a `0.4.1` verzió adminisztrátoroknak szánt
-szemeszterkezelést, sablonvezérelt kurzuslétrehozást és -lekérdezést, helyi,
-stabil azonosítós állapotmentést, biztonságos ütközéskezelést és
-szerverdiagnosztikát, valamint a Discord állapotát elsődlegesnek tekintő,
-Discordot nem módosító kurzusszinkronizálást tartalmaz. Emellett kezelt kurzusok
-és üres szemeszterek előnézetes törlését, valamint minden jelenlegi és jövőbeli
-kurzusra érvényes, nyilvántartott közös csatornákat is kezel. Az alábbi munkák
-opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
+Jelenlegi állapot: a `0.5.0` verzió adminisztrátoroknak szánt Egyetem →
+Szemeszter → Kurzus hierarchiát, szintenként kezelt névazonosságot, a régi kezelt
+állapot biztonságos migrációját, sablonvezérelt kurzuslétrehozást, stabil
+azonosítós állapotmentést, szerverdiagnosztikát és Discordot nem módosító,
+Discord-elsődleges szinkronizálást tartalmaz. Emellett kezelt kurzusok, üres
+szemeszterek és üres egyetemek előnézetes törlését, valamint minden jelenlegi
+és jövőbeli kurzusra érvényes, nyilvántartott közös csatornákat is kezel. Az
+alábbi munkák opcionálisak, és külön, kifejezett kérés szükséges hozzájuk.
 
-A `0.4.1` alapértelmezetten látható szemeszter-előtagot ad az új
+A `0.5.0` alapértelmezetten látható egyetem- és szemeszter-előtagot ad az új
 kurzuskategóriákhoz, és a fent dokumentált, célzott háromcsatornás
 kurzusstruktúrát használja.
 
@@ -510,15 +554,17 @@ kurzusstruktúrát használja.
 
 - Elkészült a `0.4.0` verzióban: kezelt kurzusok és üres szemeszterek szűk célú,
   előnézetes törlése, az ismeretlen/kézi erőforrások megtartásával.
+- Elkészült a `0.5.0` verzióban: szemeszterek egyetemi tulajdonosa, biztonságos
+  szemesztermozgatás és üres egyetemek előnézetes törlése.
 - Kurzus archiválása és visszaállítása azonnali végleges törlés nélkül.
-- Szemeszter-információ, aktuális szemeszter kijelölése, archiválás és
-  visszaállítás.
+- Egyetem-/szemeszter-információ, egyetemenkénti aktuális szemeszter
+  kijelölése, archiválás és visszaállítás.
 - Annak pontos meghatározása, mit változtat az archiválás Discordon, és mi marad
   meg az SQLite-adatbázisban.
 
 ### 3. prioritás — használhatóság, helyreállítás és hordozhatóság
 
-- Automatikus kiegészítés a szemeszter- és kurzusparaméterekhez.
+- Automatikus kiegészítés az egyetem-, szemeszter- és kurzusparaméterekhez.
 - Az egyeztetés kiterjesztése a hiányzó adatbázis helyreállítására; a jelenlegi
   szinkronizálás csak akkor tud egyértelmű pótlást visszakapcsolni, ha a kurzus
   nyilvántartása még létezik.

@@ -557,6 +557,7 @@ The important conceptual objects are:
 
 ```text
 Guild / Server
+University
 Semester
 Course
 Course Template
@@ -571,6 +572,20 @@ Sync Plan
 Not all need formal classes immediately.
 
 The design should, however, avoid treating the Discord server as an unstructured pile of channel names.
+
+The implemented domain hierarchy from version `0.5.0` is:
+
+```text
+Guild / Server
+└── University
+    └── Semester
+        └── Course
+```
+
+Universities and semesters are managed metadata, not Discord categories. Discord
+categories cannot nest, so new course category names flatten the hierarchy for
+visibility while SQLite preserves the real relationships. Stable Discord IDs,
+not the flattened names, remain the identity of managed resources.
 
 ---
 
@@ -795,9 +810,25 @@ This makes synchronization more robust.
 
 ---
 
-# 12. Semester Concept
+# 12. University and Semester Concepts
 
-Semesters should eventually be first-class entities inside the bot's domain model.
+Universities are first-class parents of semesters. Their visible command-facing
+names are unique per guild. Semester names are unique within a university, and
+course names are unique within a semester, allowing realistic repeated names
+across institutions and academic periods.
+
+The hierarchy must not be represented as nested Discord categories. The default
+course category instead uses a flattened label such as:
+
+```text
+ELTE · 2026-fall · Machine Learning
+```
+
+Moving a semester between universities changes local managed metadata only. It
+must not blindly rename existing Discord categories; administrators may rename
+them manually and then run conservative synchronization.
+
+Semesters are first-class entities inside the bot's domain model.
 
 Possible names:
 
@@ -2977,9 +3008,10 @@ It does not need continuous hosting.
 
 Each course should have a compact reusable structure.
 
-## 3. Semesters are metadata/domain objects
+## 3. Universities and semesters are metadata/domain objects
 
-Do not force impossible nested Discord category structures.
+Keep their hierarchy in managed state; do not force impossible nested Discord
+category structures.
 
 ## 4. Templates describe desired structure
 
@@ -3040,23 +3072,27 @@ Maintain useful documentation in both English and Hungarian.
                        v
                 Discord Server
                        |
-        +--------------+--------------+
-        |              |              |
-        v              v              v
-    Semesters        Courses       Global Areas
-                       |
-                       v
-              Course Template
-                       |
-         +-------------+-------------+
-         |             |             |
-         v             v             v
-   course-chat      materials    discussions
-                                      |
-                                      v
-                                  forum posts
-                       +
-                  study-room
+              +--------+--------+
+              |                 |
+              v                 v
+        Universities       Global Areas
+              |
+              v
+          Semesters
+              |
+              v
+           Courses
+              |
+              v
+       Course Template
+              |
+       +------+------+
+       |      |      |
+       v      v      v
+course-chat discussions study-room
+              |
+              v
+          forum posts
 ```
 
 ---

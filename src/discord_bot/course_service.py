@@ -94,11 +94,15 @@ class CourseService:
         guild: discord.Guild,
         *,
         name: str,
+        university_name: str,
         semester_name: str,
         code: str | None,
         requested_by: int,
     ) -> CourseCreationResult:
         clean_name = clean_entity_name(name, "Course name", 100)
+        clean_university_name = clean_entity_name(
+            university_name, "University name", 100
+        )
         clean_semester_name = clean_entity_name(semester_name, "Semester name", 100)
         clean_code = clean_optional_code(code)
 
@@ -112,11 +116,23 @@ class CourseService:
                 "Forum channels require Community to be enabled on this server."
             )
 
-        semester = self.database.get_semester(guild.id, clean_semester_name)
+        university = self.database.get_university(guild.id, clean_university_name)
+        if university is None:
+            raise CourseServiceError(
+                f'University "{clean_university_name}" does not exist.'
+            )
+        semester = self.database.get_semester(
+            guild.id, clean_semester_name, university.name
+        )
         if semester is None:
-            raise CourseServiceError(f'Semester "{clean_semester_name}" does not exist.')
+            raise CourseServiceError(
+                f'Semester "{clean_semester_name}" does not exist under '
+                f'"{university.name}".'
+            )
 
-        existing = self.database.get_course(guild.id, clean_name)
+        existing = self.database.get_course(
+            guild.id, clean_name, university.name, semester.name
+        )
         resumed = existing is not None
         if existing is not None and existing.status == "active":
             raise CourseServiceError(f'Course "{existing.name}" already exists.')
@@ -136,6 +152,7 @@ class CourseService:
             initial_context = {
                 "course_name": clean_name,
                 "course_code": clean_code or "",
+                "university": university.name,
                 "semester": semester.name,
             }
             initial_category_name = self.template.render_category_name(
@@ -159,6 +176,7 @@ class CourseService:
         context = {
             "course_name": clean_name,
             "course_code": clean_code or "",
+            "university": university.name,
             "semester": semester.name,
         }
         category_name = self.template.render_category_name(context).strip()
@@ -213,22 +231,30 @@ class CourseService:
                 created,
             ) from error
 
-        completed = self.database.get_course(guild.id, clean_name)
+        completed = self.database.get_course(
+            guild.id, clean_name, university.name, semester.name
+        )
         if completed is None:
             raise RuntimeError("The completed course record could not be loaded")
         return CourseCreationResult(completed, tuple(created), resumed)
 
     def sync_courses(
-        self, guild: discord.Guild, *, name: str | None = None
+        self,
+        guild: discord.Guild,
+        *,
+        name: str | None = None,
+        university_name: str | None = None,
+        semester_name: str | None = None,
     ) -> list[CourseSyncResult]:
         if name is None:
-            courses = self.database.list_courses(guild.id)
+            courses = self.database.list_courses(
+                guild.id, university_name, semester_name
+            )
         else:
             clean_name = clean_entity_name(name, "Course name", 100)
-            course = self.database.get_course(guild.id, clean_name)
-            if course is None:
-                raise CourseServiceError(f'Course "{clean_name}" is not managed.')
-            courses = [course]
+            courses = self._resolve_courses(
+                guild.id, clean_name, university_name, semester_name
+            )
 
         if not courses:
             raise CourseServiceError("No managed courses found.")
@@ -240,12 +266,32 @@ class CourseService:
                 "The current Discord state could not be saved to the local database."
             ) from error
 
+    def _resolve_courses(
+        self,
+        guild_id: int,
+        name: str,
+        university_name: str | None,
+        semester_name: str | None,
+    ) -> list[Course]:
+        matches = self.database.find_courses(
+            guild_id, name, university_name, semester_name
+        )
+        if not matches:
+            raise CourseServiceError(f'Course "{name}" is not managed.')
+        if len(matches) > 1:
+            raise CourseServiceError(
+                f'Course "{name}" exists in multiple locations. Specify '
+                "`university` and `semester`."
+            )
+        return matches
+
     def _sync_course(
         self, guild: discord.Guild, course: Course
     ) -> CourseSyncResult:
         context = {
             "course_name": course.name,
             "course_code": course.code or "",
+            "university": course.university_name,
             "semester": course.semester_name,
         }
         expected_category_name = self.template.render_category_name(context).strip()
@@ -465,6 +511,7 @@ class CourseService:
             context = {
                 "course_name": course.name,
                 "course_code": course.code or "",
+                "university": course.university_name,
                 "semester": course.semester_name,
             }
             if any(
@@ -709,13 +756,13 @@ class CourseService:
         name: str,
         confirm: bool,
         requested_by: int,
+        university_name: str | None = None,
+        semester_name: str | None = None,
     ) -> CourseDeleteResult:
         clean_name = clean_entity_name(name, "Course name", 100)
-        course = self.database.get_course(guild.id, clean_name)
-        if course is None:
-            raise CourseServiceError(
-                f'Course "{clean_name}" is not managed. Nothing was deleted.'
-            )
+        course = self._resolve_courses(
+            guild.id, clean_name, university_name, semester_name
+        )[0]
         owned_ids = {
             channel.discord_channel_id
             for channel in self.database.get_course_channels(course.id)

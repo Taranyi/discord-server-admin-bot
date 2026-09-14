@@ -8,6 +8,7 @@ from discord import app_commands
 from .commands.course import course_group
 from .commands.semester import semester_group
 from .commands.server import server_group
+from .commands.university import university_group
 from .config import Settings
 from .course_service import CourseService
 from .database import Database
@@ -63,6 +64,7 @@ class AdminBot(discord.Client):
     async def setup_hook(self) -> None:
         self.database.initialize()
         self.tree.add_command(server_group)
+        self.tree.add_command(university_group)
         self.tree.add_command(semester_group)
         self.tree.add_command(course_group)
         await self._sync_commands()
